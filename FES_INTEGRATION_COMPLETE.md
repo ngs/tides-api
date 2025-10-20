@@ -374,7 +374,7 @@ make fes-download-constituent CONST=x
 4. **Deploy**
    ```bash
    make docker-build
-   docker run -p 8080:8080 -v $(pwd)/data/fes:/app/data/fes tide-api
+   docker run -p 8080:8080 -v $(pwd)/data/fes:/app/data/fes tides-api
    ```
 
 ## Summary

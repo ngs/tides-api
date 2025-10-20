@@ -8,8 +8,8 @@ import (
 	"sync"
 
 	"github.com/fhs/go-netcdf/netcdf"
-	"tide-api/internal/adapter/interp"
-	"tide-api/internal/domain"
+	"go.ngs.io/tides-api/internal/adapter/interp"
+	"go.ngs.io/tides-api/internal/domain"
 )
 
 // FESStore provides access to FES2014/2022 NetCDF tidal constituent data

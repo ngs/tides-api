@@ -12,7 +12,7 @@ If you only need CSV-based predictions (no FES integration):
 brew install go
 
 # Clone and setup
-cd tide-api
+cd tides-api
 go mod download
 make run
 ```
@@ -123,8 +123,8 @@ pkg-config --modversion netcdf
 ```bash
 make build
 
-# Should create ./tide-api binary
-ls -lh tide-api
+# Should create ./tides-api binary
+ls -lh tides-api
 ```
 
 ### Test 3: Run Tests
@@ -344,8 +344,8 @@ brew install netcdf go
 make build
 
 # Binary will be native ARM64
-file tide-api
-# tide-api: Mach-O 64-bit executable arm64
+file tides-api
+# tides-api: Mach-O 64-bit executable arm64
 ```
 
 ### Linux ARM (Raspberry Pi, AWS Graviton)
@@ -387,7 +387,7 @@ Use the provided Dockerfile which includes NetCDF:
 
 ```bash
 make docker-build
-docker push your-registry/tide-api:latest
+docker push your-registry/tides-api:latest
 kubectl apply -f k8s/deployment.yaml
 ```
 
@@ -430,8 +430,8 @@ Current workaround:
 Use pre-built Docker image:
 
 ```bash
-docker pull your-registry/tide-api:latest
-docker run -p 8080:8080 tide-api:latest
+docker pull your-registry/tides-api:latest
+docker run -p 8080:8080 tides-api:latest
 ```
 
 ---

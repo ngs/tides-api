@@ -2,7 +2,7 @@ package http
 
 import (
 	"github.com/gin-gonic/gin"
-	"tide-api/internal/usecase"
+	"go.ngs.io/tides-api/internal/usecase"
 )
 
 // SetupRouter creates and configures the Gin router

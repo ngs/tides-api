@@ -41,7 +41,7 @@ gcloud services enable \
 
 ```bash
 # Create repository for Docker images
-gcloud artifacts repositories create tide-api \
+gcloud artifacts repositories create tides-api \
   --repository-format=docker \
   --location=asia-northeast1 \
   --description="Tide API container images"
@@ -66,14 +66,14 @@ gsutil -m cp -r ./data/fes/* gs://YOUR_PROJECT_ID-fes-data/
 
 ```bash
 # 1. Build and tag Docker image
-docker build -t asia-northeast1-docker.pkg.dev/YOUR_PROJECT_ID/tide-api/tide-api:latest .
+docker build -t asia-northeast1-docker.pkg.dev/YOUR_PROJECT_ID/tides-api/tides-api:latest .
 
 # 2. Push to Artifact Registry
-docker push asia-northeast1-docker.pkg.dev/YOUR_PROJECT_ID/tide-api/tide-api:latest
+docker push asia-northeast1-docker.pkg.dev/YOUR_PROJECT_ID/tides-api/tides-api:latest
 
 # 3. Deploy to Cloud Run (cost-optimized configuration)
-gcloud run deploy tide-api \
-  --image asia-northeast1-docker.pkg.dev/YOUR_PROJECT_ID/tide-api/tide-api:latest \
+gcloud run deploy tides-api \
+  --image asia-northeast1-docker.pkg.dev/YOUR_PROJECT_ID/tides-api/tides-api:latest \
   --region asia-northeast1 \
   --platform managed \
   --allow-unauthenticated \
@@ -90,8 +90,8 @@ gcloud run deploy tide-api \
 
 ```bash
 # Deploy with GCS mount (requires Cloud Run v2 API)
-gcloud run deploy tide-api \
-  --image asia-northeast1-docker.pkg.dev/YOUR_PROJECT_ID/tide-api/tide-api:latest \
+gcloud run deploy tides-api \
+  --image asia-northeast1-docker.pkg.dev/YOUR_PROJECT_ID/tides-api/tides-api:latest \
   --region asia-northeast1 \
   --platform managed \
   --allow-unauthenticated \
@@ -142,8 +142,8 @@ gcloud run deploy tide-api \
 
 ```bash
 # Deploy with min-instances=0
-gcloud run deploy tide-api \
-  --image asia-northeast1-docker.pkg.dev/YOUR_PROJECT_ID/tide-api/tide-api:latest \
+gcloud run deploy tides-api \
+  --image asia-northeast1-docker.pkg.dev/YOUR_PROJECT_ID/tides-api/tides-api:latest \
   --region asia-northeast1 \
   --min-instances 0 \
   --max-instances 10 \
@@ -151,7 +151,7 @@ gcloud run deploy tide-api \
 
 # Create Cloud Scheduler job to keep warm during business hours
 # Runs every 5 minutes, 9 AM - 6 PM JST, weekdays
-gcloud scheduler jobs create http tide-api-warmup \
+gcloud scheduler jobs create http tides-api-warmup \
   --location asia-northeast1 \
   --schedule "*/5 9-18 * * 1-5" \
   --time-zone "Asia/Tokyo" \
@@ -215,16 +215,16 @@ FROM alpine:latest
 
 ```bash
 # View recent logs
-gcloud run services logs read tide-api \
+gcloud run services logs read tides-api \
   --region asia-northeast1 \
   --limit 50
 
 # Follow logs in real-time
-gcloud run services logs tail tide-api \
+gcloud run services logs tail tides-api \
   --region asia-northeast1
 
 # Filter for errors
-gcloud run services logs read tide-api \
+gcloud run services logs read tides-api \
   --region asia-northeast1 \
   --filter "severity>=ERROR" \
   --limit 100
@@ -269,14 +269,14 @@ Add Prometheus metrics to track:
 
 1. **Increase timeout:**
 ```bash
-gcloud run services update tide-api \
+gcloud run services update tides-api \
   --region asia-northeast1 \
   --timeout 120s
 ```
 
 2. **Use min-instances=1:**
 ```bash
-gcloud run services update tide-api \
+gcloud run services update tides-api \
   --region asia-northeast1 \
   --min-instances 1
 ```
@@ -291,7 +291,7 @@ gcloud run services update tide-api \
 
 1. **Increase memory allocation:**
 ```bash
-gcloud run services update tide-api \
+gcloud run services update tides-api \
   --region asia-northeast1 \
   --memory 2Gi
 ```
@@ -309,7 +309,7 @@ gcloud run services update tide-api \
 1. **Verify GCS bucket mount:**
 ```bash
 # Check deployment configuration
-gcloud run services describe tide-api \
+gcloud run services describe tides-api \
   --region asia-northeast1 \
   --format "value(spec.template.spec.volumes)"
 ```
@@ -337,7 +337,7 @@ RUN apk add --no-cache netcdf
 
 If issue persists, rebuild image:
 ```bash
-docker build --no-cache -t asia-northeast1-docker.pkg.dev/YOUR_PROJECT_ID/tide-api/tide-api:latest .
+docker build --no-cache -t asia-northeast1-docker.pkg.dev/YOUR_PROJECT_ID/tides-api/tides-api:latest .
 ```
 
 ### Issue 5: 403 Forbidden on Public Access
@@ -346,7 +346,7 @@ docker build --no-cache -t asia-northeast1-docker.pkg.dev/YOUR_PROJECT_ID/tide-a
 
 **Solution:** Allow unauthenticated access:
 ```bash
-gcloud run services add-iam-policy-binding tide-api \
+gcloud run services add-iam-policy-binding tides-api \
   --region asia-northeast1 \
   --member "allUsers" \
   --role "roles/run.invoker"
@@ -359,7 +359,7 @@ gcloud run services add-iam-policy-binding tide-api \
 ```bash
 # Map custom domain
 gcloud run domain-mappings create \
-  --service tide-api \
+  --service tides-api \
   --domain api.yourdomain.com \
   --region asia-northeast1
 
@@ -372,19 +372,19 @@ For caching tide predictions:
 
 ```bash
 # Create serverless NEG
-gcloud compute network-endpoint-groups create tide-api-neg \
+gcloud compute network-endpoint-groups create tides-api-neg \
   --region asia-northeast1 \
   --network-endpoint-type serverless \
-  --cloud-run-service tide-api
+  --cloud-run-service tides-api
 
 # Create backend service with CDN enabled
-gcloud compute backend-services create tide-api-backend \
+gcloud compute backend-services create tides-api-backend \
   --global \
   --enable-cdn \
   --cache-mode CACHE_ALL_STATIC
 
 # Configure cache TTL
-gcloud compute backend-services update tide-api-backend \
+gcloud compute backend-services update tides-api-backend \
   --global \
   --default-ttl 3600 \
   --max-ttl 86400 \
@@ -398,8 +398,8 @@ For global availability:
 ```bash
 # Deploy to multiple regions
 for region in asia-northeast1 us-central1 europe-west1; do
-  gcloud run deploy tide-api \
-    --image asia-northeast1-docker.pkg.dev/YOUR_PROJECT_ID/tide-api/tide-api:latest \
+  gcloud run deploy tides-api \
+    --image asia-northeast1-docker.pkg.dev/YOUR_PROJECT_ID/tides-api/tides-api:latest \
     --region $region \
     # ... other flags
 done
@@ -420,9 +420,9 @@ steps:
     args:
       - 'build'
       - '-t'
-      - 'asia-northeast1-docker.pkg.dev/${PROJECT_ID}/tide-api/tide-api:${COMMIT_SHA}'
+      - 'asia-northeast1-docker.pkg.dev/${PROJECT_ID}/tides-api/tides-api:${COMMIT_SHA}'
       - '-t'
-      - 'asia-northeast1-docker.pkg.dev/${PROJECT_ID}/tide-api/tide-api:latest'
+      - 'asia-northeast1-docker.pkg.dev/${PROJECT_ID}/tides-api/tides-api:latest'
       - '.'
 
   # Push to Artifact Registry
@@ -430,7 +430,7 @@ steps:
     args:
       - 'push'
       - '--all-tags'
-      - 'asia-northeast1-docker.pkg.dev/${PROJECT_ID}/tide-api/tide-api'
+      - 'asia-northeast1-docker.pkg.dev/${PROJECT_ID}/tides-api/tides-api'
 
   # Deploy to Cloud Run
   - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
@@ -438,17 +438,17 @@ steps:
     args:
       - 'run'
       - 'deploy'
-      - 'tide-api'
+      - 'tides-api'
       - '--image'
-      - 'asia-northeast1-docker.pkg.dev/${PROJECT_ID}/tide-api/tide-api:${COMMIT_SHA}'
+      - 'asia-northeast1-docker.pkg.dev/${PROJECT_ID}/tides-api/tides-api:${COMMIT_SHA}'
       - '--region'
       - 'asia-northeast1'
       - '--platform'
       - 'managed'
 
 images:
-  - 'asia-northeast1-docker.pkg.dev/${PROJECT_ID}/tide-api/tide-api:${COMMIT_SHA}'
-  - 'asia-northeast1-docker.pkg.dev/${PROJECT_ID}/tide-api/tide-api:latest'
+  - 'asia-northeast1-docker.pkg.dev/${PROJECT_ID}/tides-api/tides-api:${COMMIT_SHA}'
+  - 'asia-northeast1-docker.pkg.dev/${PROJECT_ID}/tides-api/tides-api:latest'
 ```
 
 ### Trigger on Git Push
@@ -477,7 +477,7 @@ gcloud secrets add-iam-policy-binding aviso-username \
   --role="roles/secretmanager.secretAccessor"
 
 # Mount secrets in Cloud Run
-gcloud run services update tide-api \
+gcloud run services update tides-api \
   --region asia-northeast1 \
   --update-secrets AVISO_USER=aviso-username:latest \
   --update-secrets AVISO_PASS=aviso-password:latest
@@ -487,14 +487,14 @@ gcloud run services update tide-api \
 
 ```bash
 # Create VPC connector
-gcloud compute networks vpc-access connectors create tide-api-connector \
+gcloud compute networks vpc-access connectors create tides-api-connector \
   --region asia-northeast1 \
   --range 10.8.0.0/28
 
 # Use connector in Cloud Run
-gcloud run services update tide-api \
+gcloud run services update tides-api \
   --region asia-northeast1 \
-  --vpc-connector tide-api-connector \
+  --vpc-connector tides-api-connector \
   --vpc-egress private-ranges-only
 ```
 
@@ -504,12 +504,12 @@ For DDoS protection (requires Cloud Load Balancer):
 
 ```bash
 # Create security policy
-gcloud compute security-policies create tide-api-policy \
+gcloud compute security-policies create tides-api-policy \
   --description "Rate limiting for Tide API"
 
 # Add rate limiting rule
 gcloud compute security-policies rules create 1000 \
-  --security-policy tide-api-policy \
+  --security-policy tides-api-policy \
   --expression "true" \
   --action "rate-based-ban" \
   --rate-limit-threshold-count 100 \
@@ -555,15 +555,15 @@ Example (min=0, 11.5MB FES, 1000 req/month):
 
 1. **Deploy to staging:**
    ```bash
-   gcloud run deploy tide-api-staging \
-     --image asia-northeast1-docker.pkg.dev/YOUR_PROJECT_ID/tide-api/tide-api:latest \
+   gcloud run deploy tides-api-staging \
+     --image asia-northeast1-docker.pkg.dev/YOUR_PROJECT_ID/tides-api/tides-api:latest \
      --region asia-northeast1 \
      --min-instances 0
    ```
 
 2. **Test API:**
    ```bash
-   SERVICE_URL=$(gcloud run services describe tide-api-staging --region asia-northeast1 --format 'value(status.url)')
+   SERVICE_URL=$(gcloud run services describe tides-api-staging --region asia-northeast1 --format 'value(status.url)')
    curl "${SERVICE_URL}/healthz"
    curl "${SERVICE_URL}/v1/constituents"
    curl "${SERVICE_URL}/v1/tides/predictions?lat=35.6762&lon=139.6503&start=2025-10-21T00:00:00Z&end=2025-10-21T12:00:00Z&interval=10m"
@@ -571,7 +571,7 @@ Example (min=0, 11.5MB FES, 1000 req/month):
 
 3. **Promote to production:**
    ```bash
-   gcloud run services update-traffic tide-api \
+   gcloud run services update-traffic tides-api \
      --region asia-northeast1 \
      --to-latest
    ```
@@ -580,7 +580,7 @@ Example (min=0, 11.5MB FES, 1000 req/month):
 
 For issues or questions:
 - Check [TROUBLESHOOTING.md](TROUBLESHOOTING.md)
-- Review Cloud Run logs: `gcloud run services logs read tide-api`
+- Review Cloud Run logs: `gcloud run services logs read tides-api`
 - Create GitHub issue: [github.com/ngs/tides-api/issues](https://github.com/ngs/tides-api/issues)
 
 ---

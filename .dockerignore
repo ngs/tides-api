@@ -7,7 +7,7 @@
 LICENSE
 
 # Build artifacts
-tide-api
+tides-api
 *.exe
 *.test
 *.out

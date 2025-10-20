@@ -7,8 +7,8 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
-	"tide-api/internal/domain"
-	"tide-api/internal/usecase"
+	"go.ngs.io/tides-api/internal/domain"
+	"go.ngs.io/tides-api/internal/usecase"
 )
 
 // Handler handles HTTP requests for tide predictions

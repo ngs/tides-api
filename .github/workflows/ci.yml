@@ -1,0 +1,152 @@
+name: CI
+
+on:
+  push:
+    branches:
+      - "**"
+  pull_request:
+
+jobs:
+  test:
+    name: Test
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Install NetCDF library
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libnetcdf-dev
+
+      - name: Download dependencies
+        run: go mod download
+
+      - name: Run tests with coverage
+        run: go test -v -race -coverprofile=coverage.out ./...
+
+      - name: Upload coverage to Codecov
+        uses: codecov/codecov-action@v4
+        with:
+          file: ./coverage.out
+          flags: unittests
+          name: codecov-tides-api
+          token: ${{ secrets.CODECOV_TOKEN }}
+        continue-on-error: true
+
+  build:
+    name: Build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Install NetCDF library
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libnetcdf-dev
+
+      - name: Build binary
+        run: |
+          go build -v -o tides-api ./cmd/server/main.go
+          ./tides-api --help || echo "Binary built successfully"
+
+      - name: Check binary size
+        run: |
+          ls -lh tides-api
+          echo "Binary size: $(du -h tides-api | cut -f1)"
+
+  docker:
+    name: Docker Build & Test
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Build Docker image
+        run: |
+          docker build -t tides-api:test .
+
+      - name: Run Docker container
+        run: |
+          docker run -d \
+            --name tides-api-test \
+            -p 8080:8080 \
+            -e PORT=8080 \
+            tides-api:test
+
+      - name: Wait for service to be ready
+        run: |
+          echo "Waiting for service to start..."
+          for i in {1..30}; do
+            if curl -f http://localhost:8080/healthz; then
+              echo "Service is ready!"
+              exit 0
+            fi
+            echo "Attempt $i/30 failed, waiting..."
+            sleep 2
+          done
+          echo "Service failed to start"
+          docker logs tides-api-test
+          exit 1
+
+      - name: Test health endpoint
+        run: |
+          curl -v http://localhost:8080/healthz
+          curl -s http://localhost:8080/healthz | jq .
+
+      - name: Test constituents endpoint
+        run: |
+          curl -v http://localhost:8080/v1/constituents
+          curl -s http://localhost:8080/v1/constituents | jq '.constituents | length'
+
+      - name: Test predictions endpoint (CSV source)
+        run: |
+          curl -v 'http://localhost:8080/v1/tides/predictions?station_id=tokyo&start=2025-10-21T00:00:00Z&end=2025-10-21T03:00:00Z&interval=30m'
+          curl -s 'http://localhost:8080/v1/tides/predictions?station_id=tokyo&start=2025-10-21T00:00:00Z&end=2025-10-21T03:00:00Z&interval=30m' | jq '.source, .predictions | length'
+
+      - name: Test predictions endpoint (FES source)
+        run: |
+          curl -v 'http://localhost:8080/v1/tides/predictions?lat=35.6762&lon=139.6503&start=2025-10-21T00:00:00Z&end=2025-10-21T03:00:00Z&interval=30m'
+          curl -s 'http://localhost:8080/v1/tides/predictions?lat=35.6762&lon=139.6503&start=2025-10-21T00:00:00Z&end=2025-10-21T03:00:00Z&interval=30m' | jq '.source, .predictions | length'
+
+      - name: Show container logs
+        if: always()
+        run: docker logs tides-api-test
+
+      - name: Stop container
+        if: always()
+        run: docker stop tides-api-test || true
+
+  lint:
+    name: Lint
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Install NetCDF library
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libnetcdf-dev
+
+      - name: Run golangci-lint
+        uses: golangci/golangci-lint-action@v4
+        with:
+          version: latest
+          args: --timeout=5m

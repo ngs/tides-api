@@ -6,7 +6,7 @@ Get the Tide API running in under 5 minutes!
 
 ```bash
 # Make sure you're in the project directory
-cd tide-api
+cd tides-api
 
 # Run the server
 make run
@@ -148,7 +148,7 @@ Then use `http://localhost:8081` in your curl commands.
 The server looks for CSV data in `./data` by default. Make sure you're running from the project root:
 
 ```bash
-cd /path/to/tide-api
+cd /path/to/tides-api
 make run
 ```
 

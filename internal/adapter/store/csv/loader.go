@@ -7,7 +7,7 @@ import (
 	"strconv"
 	"strings"
 
-	"tide-api/internal/domain"
+	"go.ngs.io/tides-api/internal/domain"
 )
 
 // ConstituentStore provides access to tidal constituent data

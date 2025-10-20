@@ -1,6 +1,6 @@
 package store
 
-import "tide-api/internal/domain"
+import "go.ngs.io/tides-api/internal/domain"
 
 // ConstituentLoader is the interface for loading tidal constituent parameters
 type ConstituentLoader interface {

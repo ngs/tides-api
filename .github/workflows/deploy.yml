@@ -1,0 +1,195 @@
+name: Deploy to Cloud Run
+
+on:
+  push:
+    branches:
+      - master
+      - main
+  workflow_dispatch:
+    inputs:
+      deploy_method:
+        description: "Deployment method"
+        required: true
+        default: "source"
+        type: choice
+        options:
+          - source
+          - artifact-registry
+          - cloud-build
+
+env:
+  PROJECT_ID: ${{ secrets.PROJECT_ID }}
+  REGION: asia-northeast1
+  SERVICE_NAME: tides-api
+  REPOSITORY: cloud-run-source-deploy
+  FES_DIR: /app/data/fes
+
+jobs:
+  deploy:
+    name: Deploy to Cloud Run
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Authenticate to Google Cloud (WIF)
+        id: auth
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ secrets.WIF_PROVIDER }}
+          service_account: ${{ secrets.WIF_SERVICE_ACCOUNT }}
+
+      - name: Set up Cloud SDK
+        uses: google-github-actions/setup-gcloud@v2
+
+      - name: Enable required APIs
+        run: |
+          gcloud services enable \
+            cloudbuild.googleapis.com \
+            run.googleapis.com \
+            artifactregistry.googleapis.com \
+            storage-api.googleapis.com \
+            --project=${{ env.PROJECT_ID }}
+
+      - name: Deploy (Source)
+        if: github.event.inputs.deploy_method == 'source' || github.event.inputs.deploy_method == ''
+        run: |
+          gcloud run deploy ${{ env.SERVICE_NAME }} \
+            --source . \
+            --region ${{ env.REGION }} \
+            --platform managed \
+            --allow-unauthenticated \
+            --min-instances 0 \
+            --max-instances 10 \
+            --memory 1Gi \
+            --cpu 1 \
+            --timeout 60s \
+            --concurrency 80 \
+            --set-env-vars "PORT=8080,DATA_DIR=/app/data,FES_DIR=${{ env.FES_DIR }},TZ=Asia/Tokyo" \
+            --project=${{ env.PROJECT_ID }}
+
+      - name: Deploy (Artifact Registry)
+        if: github.event.inputs.deploy_method == 'artifact-registry'
+        run: |
+          # Build and push image
+          gcloud builds submit \
+            --tag ${{ env.REGION }}-docker.pkg.dev/${{ env.PROJECT_ID }}/${{ env.REPOSITORY }}/${{ env.SERVICE_NAME }}:${{ github.sha }} \
+            --project=${{ env.PROJECT_ID }}
+
+          # Deploy to Cloud Run
+          gcloud run deploy ${{ env.SERVICE_NAME }} \
+            --image ${{ env.REGION }}-docker.pkg.dev/${{ env.PROJECT_ID }}/${{ env.REPOSITORY }}/${{ env.SERVICE_NAME }}:${{ github.sha }} \
+            --region ${{ env.REGION }} \
+            --platform managed \
+            --allow-unauthenticated \
+            --min-instances 0 \
+            --max-instances 10 \
+            --memory 1Gi \
+            --cpu 1 \
+            --timeout 60s \
+            --concurrency 80 \
+            --set-env-vars "PORT=8080,DATA_DIR=/app/data,FES_DIR=${{ env.FES_DIR }},TZ=Asia/Tokyo" \
+            --project=${{ env.PROJECT_ID }}
+
+      - name: Deploy (Cloud Build)
+        if: github.event.inputs.deploy_method == 'cloud-build'
+        run: |
+          gcloud builds submit \
+            --config cloudbuild.yaml \
+            --substitutions _REGION=${{ env.REGION }},_REPOSITORY=${{ env.REPOSITORY }},_SERVICE_NAME=${{ env.SERVICE_NAME }} \
+            --project=${{ env.PROJECT_ID }}
+
+      - name: Wait for service to be ready
+        run: |
+          SERVICE_URL=$(gcloud run services describe ${{ env.SERVICE_NAME }} \
+            --region ${{ env.REGION }} \
+            --project=${{ env.PROJECT_ID }} \
+            --format 'value(status.url)')
+
+          echo "Service URL: $SERVICE_URL"
+          echo "Waiting for service to be ready..."
+
+          for i in {1..30}; do
+            if curl -f "$SERVICE_URL/healthz"; then
+              echo "Service is ready!"
+              exit 0
+            fi
+            echo "Attempt $i/30 failed, waiting..."
+            sleep 5
+          done
+
+          echo "Service failed to be ready within timeout"
+          exit 1
+
+      - name: Test health endpoint
+        run: |
+          SERVICE_URL=$(gcloud run services describe ${{ env.SERVICE_NAME }} \
+            --region ${{ env.REGION }} \
+            --project=${{ env.PROJECT_ID }} \
+            --format 'value(status.url)')
+
+          echo "Testing health endpoint..."
+          curl -v "$SERVICE_URL/healthz"
+          curl -s "$SERVICE_URL/healthz" | jq .
+
+      - name: Test constituents endpoint
+        run: |
+          SERVICE_URL=$(gcloud run services describe ${{ env.SERVICE_NAME }} \
+            --region ${{ env.REGION }} \
+            --project=${{ env.PROJECT_ID }} \
+            --format 'value(status.url)')
+
+          echo "Testing constituents endpoint..."
+          curl -v "$SERVICE_URL/v1/constituents"
+          CONSTITUENTS=$(curl -s "$SERVICE_URL/v1/constituents" | jq -r '.count')
+          echo "Available constituents: $CONSTITUENTS"
+
+      - name: Test predictions endpoint (CSV)
+        run: |
+          SERVICE_URL=$(gcloud run services describe ${{ env.SERVICE_NAME }} \
+            --region ${{ env.REGION }} \
+            --project=${{ env.PROJECT_ID }} \
+            --format 'value(status.url)')
+
+          echo "Testing CSV predictions endpoint..."
+          curl -s "$SERVICE_URL/v1/tides/predictions?station_id=tokyo&start=2025-10-21T00:00:00Z&end=2025-10-21T03:00:00Z&interval=30m" | jq '.source, .predictions | length'
+
+      - name: Test predictions endpoint (FES)
+        run: |
+          SERVICE_URL=$(gcloud run services describe ${{ env.SERVICE_NAME }} \
+            --region ${{ env.REGION }} \
+            --project=${{ env.PROJECT_ID }} \
+            --format 'value(status.url)')
+
+          echo "Testing FES predictions endpoint..."
+          curl -s "$SERVICE_URL/v1/tides/predictions?lat=35.6762&lon=139.6503&start=2025-10-21T00:00:00Z&end=2025-10-21T03:00:00Z&interval=30m" | jq '.source, .predictions | length'
+
+      - name: Deployment summary
+        run: |
+          SERVICE_URL=$(gcloud run services describe ${{ env.SERVICE_NAME }} \
+            --region ${{ env.REGION }} \
+            --project=${{ env.PROJECT_ID }} \
+            --format 'value(status.url)')
+
+          echo ""
+          echo "=================================================="
+          echo "Deployment Summary"
+          echo "=================================================="
+          echo "Service: ${{ env.SERVICE_NAME }}"
+          echo "Region: ${{ env.REGION }}"
+          echo "URL: $SERVICE_URL"
+          echo "Method: ${{ github.event.inputs.deploy_method || 'source' }}"
+          echo ""
+          echo "Endpoints:"
+          echo "  Health: $SERVICE_URL/healthz"
+          echo "  Constituents: $SERVICE_URL/v1/constituents"
+          echo "  Predictions: $SERVICE_URL/v1/tides/predictions"
+          echo ""
+          echo "Example queries:"
+          echo "  Station (CSV): $SERVICE_URL/v1/tides/predictions?station_id=tokyo&start=2025-10-21T00:00:00Z&end=2025-10-21T12:00:00Z&interval=10m"
+          echo "  Lat/Lon (FES): $SERVICE_URL/v1/tides/predictions?lat=35.6762&lon=139.6503&start=2025-10-21T00:00:00Z&end=2025-10-21T12:00:00Z&interval=10m"
+          echo "=================================================="

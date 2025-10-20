@@ -40,7 +40,7 @@ A production-ready tidal prediction API written in Go that performs harmonic tid
 ## Project Structure
 
 ```
-tide-api/
+tides-api/
 ├── cmd/server/                    # Application entry point
 │   └── main.go                    # Server initialization
 ├── internal/
@@ -264,8 +264,8 @@ github.com/fhs/go-netcdf v1.2.1       # NetCDF support (for FES)
 
 ### Docker
 ```bash
-docker build -t tide-api .
-docker run -p 8080:8080 tide-api
+docker build -t tides-api .
+docker run -p 8080:8080 tides-api
 ```
 
 ### Kubernetes (example)
@@ -273,14 +273,14 @@ docker run -p 8080:8080 tide-api
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: tide-api
+  name: tides-api
 spec:
   replicas: 3
   template:
     spec:
       containers:
-      - name: tide-api
-        image: tide-api:latest
+      - name: tides-api
+        image: tides-api:latest
         ports:
         - containerPort: 8080
 ```
@@ -290,7 +290,7 @@ spec:
 ```bash
 # Clone and run
 git clone <repo>
-cd tide-api
+cd tides-api
 make run
 
 # Test

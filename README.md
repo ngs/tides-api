@@ -26,7 +26,7 @@ A high-performance tidal prediction API written in Go, providing harmonic tidal 
 ```bash
 # Clone the repository
 git clone git@github.com:ngs/tides-api.git
-cd tide-api
+cd tides-api
 
 # Install dependencies
 go mod download
@@ -218,7 +218,7 @@ curl 'http://localhost:8080/v1/tides/predictions?lat=35.6762&lon=139.6503&start=
 ### Project Structure
 
 ```
-tide-api/
+tides-api/
 ├── cmd/server/          # Application entry point
 ├── internal/
 │   ├── domain/          # Core business logic (tides, constituents)

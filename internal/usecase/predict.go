@@ -4,8 +4,8 @@ import (
 	"fmt"
 	"time"
 
-	"tide-api/internal/adapter/store"
-	"tide-api/internal/domain"
+	"go.ngs.io/tides-api/internal/adapter/store"
+	"go.ngs.io/tides-api/internal/domain"
 )
 
 // PredictionRequest encapsulates a tide prediction request

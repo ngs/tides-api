@@ -4,7 +4,7 @@
 .DEFAULT_GOAL := help
 
 # Binary name
-BINARY_NAME=tide-api
+BINARY_NAME=tides-api
 BINARY_PATH=./$(BINARY_NAME)
 
 # Go parameters
@@ -21,7 +21,7 @@ help: ## Display this help screen
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-15s\033[0m %s\n", $$1, $$2}'
 
 run: ## Run the server locally
-	@echo "Starting tide-api server..."
+	@echo "Starting tides-api server..."
 	$(GORUN) ./cmd/server/main.go
 
 build: ## Build the binary
@@ -75,16 +75,16 @@ dev: ## Run in development mode (same as run)
 # Docker targets
 docker-build: ## Build Docker image
 	@echo "Building Docker image..."
-	docker build -t tide-api:latest .
-	@echo "Docker image built: tide-api:latest"
+	docker build -t tides-api:latest .
+	@echo "Docker image built: tides-api:latest"
 
 docker-run: ## Run Docker container
 	@echo "Running Docker container..."
-	docker run -p 8080:8080 --env-file .env -v $(PWD)/data:/app/data tide-api:latest
+	docker run -p 8080:8080 --env-file .env -v $(PWD)/data:/app/data tides-api:latest
 
 docker-clean: ## Remove Docker image
 	@echo "Removing Docker image..."
-	docker rmi tide-api:latest
+	docker rmi tides-api:latest
 
 # API testing targets
 curl-health: ## Test health endpoint
