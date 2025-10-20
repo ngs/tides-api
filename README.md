@@ -25,7 +25,7 @@ A high-performance tidal prediction API written in Go, providing harmonic tidal 
 
 ```bash
 # Clone the repository
-git clone <repository-url>
+git clone git@github.com:ngs/tides-api.git
 cd tide-api
 
 # Install dependencies
@@ -179,20 +179,39 @@ curl 'http://localhost:8080/v1/tides/predictions?station_id=tokyo&...'
 
 See [data/README_DATA.md](data/README_DATA.md) for more details.
 
-### FES NetCDF Data (Production)
+### FES NetCDF Data (Production) ✅ **NOW IMPLEMENTED**
 
 For production use with FES2014/2022:
 
-1. Obtain FES data from [AVISO+](https://www.aviso.altimetry.fr/)
-2. Place NetCDF files in `data/fes/` directory
-3. Configure `FES_DIR` environment variable
-4. Query with `lat`/`lon`:
+**Quick Setup:**
 
 ```bash
-curl 'http://localhost:8080/v1/tides/predictions?lat=35.6762&lon=139.6503&...'
+# 1. Install NetCDF library (macOS)
+brew install netcdf
+
+# 2. Setup AVISO credentials
+make fes-setup
+
+# 3. Download FES data
+make fes-download-major  # Downloads M2, S2, K1, O1, N2, K2, P1, Q1
+
+# 4. Start server
+make run
+
+# 5. Test with lat/lon
+curl 'http://localhost:8080/v1/tides/predictions?lat=35.6762&lon=139.6503&start=2025-10-21T00:00:00Z&end=2025-10-21T12:00:00Z&interval=10m'
 ```
 
-**Note**: FES NetCDF loader is currently a stub. Implementation requires integrating with `github.com/fhs/go-netcdf`.
+**Features:**
+- ✅ Full NetCDF file reading
+- ✅ Bilinear interpolation for any lat/lon
+- ✅ Automatic grid caching
+- ✅ Support for multiple file naming conventions
+- ✅ Automatic constituent detection
+
+**Documentation:**
+- [FES_SETUP.md](FES_SETUP.md) - Complete FES setup guide
+- [INSTALL.md](INSTALL.md) - Installation instructions for NetCDF library
 
 ## Development
 

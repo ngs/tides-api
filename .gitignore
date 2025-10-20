@@ -34,6 +34,15 @@ Thumbs.db
 
 # FES Data (too large for git, requires license)
 data/fes/*.nc
+data/fes/**/*.nc
+data/fes/**/*.tar.gz
+data/fes/**/*.zip
+data/fes/.credentials
+.fes_credentials
+
+# FES download temporary files
+*.part
+*.tmp
 
 # Logs
 *.log
