@@ -1,0 +1,36 @@
+# Git
+.git
+.gitignore
+
+# Documentation
+*.md
+LICENSE
+
+# Build artifacts
+tide-api
+*.exe
+*.test
+*.out
+
+# IDE
+.vscode
+.idea
+*.swp
+
+# OS
+.DS_Store
+
+# Environment
+.env
+.env.local
+
+# Test coverage
+coverage.out
+coverage.html
+
+# FES data (mount as volume if needed)
+data/fes/*.nc
+
+# Logs
+*.log
+logs/
