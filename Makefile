@@ -7,6 +7,11 @@
 BINARY_NAME=tides-api
 BINARY_PATH=./$(BINARY_NAME)
 
+# GCP parameters
+PROJECT_ID ?= $(shell gcloud config get-value project 2>/dev/null)
+REGION ?= asia-northeast1
+GCS_FES_BUCKET ?= $(PROJECT_ID)-tides-fes-data
+
 # Go parameters
 GOCMD=go
 GOBUILD=$(GOCMD) build
@@ -116,8 +121,8 @@ FES_DIR := ./data/fes
 FES_USER ?= $(shell cat .fes_credentials 2>/dev/null | head -1)
 FES_PASS ?= $(shell cat .fes_credentials 2>/dev/null | tail -1)
 FES_HOST := ftp-access.aviso.altimetry.fr
-FES_PORT := 2221
-FES_REMOTE_PATH := /auxiliary/tide_model/fes2014
+FES_PORT := 21
+FES_REMOTE_PATH := /auxiliary/tide_model/fes2014_elevations_and_load/fes2014b_elevations
 
 fes-setup: ## Setup FES credentials (interactive)
 	@echo "FES2014 Data Download Setup"
@@ -140,59 +145,34 @@ fes-list: ## List available FES files on AVISO server
 		echo "Error: FES credentials not found. Run 'make fes-setup' first."; \
 		exit 1; \
 	fi
-	@lftp -u $(FES_USER),$(FES_PASS) sftp://$(FES_HOST):$(FES_PORT) -e "cd $(FES_REMOTE_PATH); ls; bye"
+	@lftp -u $(FES_USER),$(FES_PASS) ftp://$(FES_HOST):$(FES_PORT) -e "cd $(FES_REMOTE_PATH); ls; bye"
 
-fes-download-constituent: ## Download a specific constituent (usage: make fes-download-constituent CONST=m2)
-	@if [ -z "$(CONST)" ]; then \
-		echo "Error: Please specify CONST=<constituent_name>"; \
-		echo "Example: make fes-download-constituent CONST=m2"; \
-		exit 1; \
-	fi
+fes-download-ocean-tide: ## Download FES2014 ocean tide data archive (~1.9GB)
 	@if [ -z "$(FES_USER)" ] || [ -z "$(FES_PASS)" ]; then \
 		echo "Error: FES credentials not found. Run 'make fes-setup' first."; \
 		exit 1; \
 	fi
-	@echo "Downloading $(CONST) constituent from FES2014..."
+	@echo "Downloading FES2014 ocean tide data archive..."
+	@echo "This is a 1.9GB file and will take several minutes..."
 	@mkdir -p $(FES_DIR)
-	@lftp -u $(FES_USER),$(FES_PASS) sftp://$(FES_HOST):$(FES_PORT) -e "\
+	@lftp -u $(FES_USER),$(FES_PASS) ftp://$(FES_HOST):$(FES_PORT) -e "\
 		cd $(FES_REMOTE_PATH); \
-		mget -c $(CONST)*.nc -o $(FES_DIR)/; \
+		lcd $(FES_DIR); \
+		get -c ocean_tide.tar.xz; \
+		get -c ocean_tide.tar.xz.sha256sum; \
 		bye"
-	@echo "Downloaded $(CONST) files to $(FES_DIR)/"
+	@echo "Downloaded ocean_tide.tar.xz to $(FES_DIR)/"
+	@echo "Verifying checksum..."
+	@cd $(FES_DIR) && sha256sum -c ocean_tide.tar.xz.sha256sum
+	@echo "Extracting archive..."
+	@cd $(FES_DIR) && tar -xJf ocean_tide.tar.xz
+	@echo "Cleaning up archive..."
+	@rm -f $(FES_DIR)/ocean_tide.tar.xz $(FES_DIR)/ocean_tide.tar.xz.sha256sum
+	@echo "FES2014 ocean tide data extracted to $(FES_DIR)/"
 
-fes-download-major: ## Download major constituents (M2, S2, K1, O1, N2, K2, P1, Q1)
-	@if [ -z "$(FES_USER)" ] || [ -z "$(FES_PASS)" ]; then \
-		echo "Error: FES credentials not found. Run 'make fes-setup' first."; \
-		exit 1; \
-	fi
-	@echo "Downloading major tidal constituents from FES2014..."
-	@echo "This may take several minutes..."
-	@mkdir -p $(FES_DIR)
-	@for const in m2 s2 k1 o1 n2 k2 p1 q1; do \
-		echo "Downloading $$const..."; \
-		$(MAKE) --no-print-directory fes-download-constituent CONST=$$const; \
-	done
-	@echo "All major constituents downloaded!"
-	@echo "Files saved to $(FES_DIR)/"
+fes-download-major: fes-download-ocean-tide ## Alias for downloading FES2014 ocean tide data
 
-fes-download-all: ## Download all available FES2014 constituents
-	@if [ -z "$(FES_USER)" ] || [ -z "$(FES_PASS)" ]; then \
-		echo "Error: FES credentials not found. Run 'make fes-setup' first."; \
-		exit 1; \
-	fi
-	@echo "Downloading ALL FES2014 constituents..."
-	@echo "WARNING: This will download ~5GB of data and may take 30+ minutes"
-	@read -p "Continue? [y/N] " confirm; \
-	if [ "$$confirm" != "y" ] && [ "$$confirm" != "Y" ]; then \
-		echo "Cancelled."; \
-		exit 1; \
-	fi
-	@mkdir -p $(FES_DIR)
-	@lftp -u $(FES_USER),$(FES_PASS) sftp://$(FES_HOST):$(FES_PORT) -e "\
-		cd $(FES_REMOTE_PATH); \
-		mirror --continue --verbose --only-newer --parallel=3 . $(FES_DIR)/; \
-		bye"
-	@echo "All FES2014 files downloaded to $(FES_DIR)/"
+fes-download-all: fes-download-ocean-tide ## Alias for downloading FES2014 ocean tide data (same as fes-download-major)
 
 fes-check: ## Check downloaded FES files
 	@echo "Checking FES data files in $(FES_DIR)..."
@@ -255,25 +235,77 @@ fes-mock-custom: ## Generate custom region mock FES (set LAT_MIN, LAT_MAX, LON_M
 		-lon-max $(LON_MAX) \
 		-resolution $(RES)
 
-# Alternative: Use curl for single file download
-fes-download-curl: ## Download FES file using curl (usage: make fes-download-curl FILE=m2_amplitude.nc)
-	@if [ -z "$(FILE)" ]; then \
-		echo "Error: Please specify FILE=<filename>"; \
-		echo "Example: make fes-download-curl FILE=m2_amplitude.nc"; \
+# GCP Cloud Storage targets
+gcs-check-project: ## Check current GCP project
+	@echo "Current GCP project: $(PROJECT_ID)"
+	@echo "FES bucket name: $(GCS_FES_BUCKET)"
+	@echo "Region: $(REGION)"
+
+gcs-create-bucket: ## Create GCS bucket for FES data
+	@echo "Creating Cloud Storage bucket for FES data..."
+	@if [ -z "$(PROJECT_ID)" ]; then \
+		echo "Error: PROJECT_ID not set. Run 'gcloud config set project YOUR_PROJECT_ID'"; \
 		exit 1; \
 	fi
-	@if [ -z "$(FES_USER)" ] || [ -z "$(FES_PASS)" ]; then \
-		echo "Error: FES credentials not found. Run 'make fes-setup' first."; \
+	@gsutil ls -b gs://$(GCS_FES_BUCKET) 2>/dev/null || \
+	(gsutil mb -l $(REGION) -b on gs://$(GCS_FES_BUCKET) && \
+	 echo "Bucket created: gs://$(GCS_FES_BUCKET)")
+	@echo "Storage cost estimate: ~¥13/month for 4.3GB in $(REGION)"
+
+gcs-upload-fes: ## Upload FES data to Cloud Storage
+	@echo "Uploading FES data to Cloud Storage..."
+	@if [ ! -d "$(FES_DIR)" ]; then \
+		echo "Error: FES directory not found: $(FES_DIR)"; \
+		echo "Run 'make fes-download-major' or 'make fes-mock' first."; \
 		exit 1; \
 	fi
-	@echo "Downloading $(FILE) using curl..."
+	@echo "Checking bucket exists..."
+	@gsutil ls -b gs://$(GCS_FES_BUCKET) >/dev/null 2>&1 || \
+	(echo "Error: Bucket gs://$(GCS_FES_BUCKET) not found. Run 'make gcs-create-bucket' first." && exit 1)
+	@echo "Starting upload (this may take a few minutes)..."
+	@gsutil -m rsync -r -d $(FES_DIR) gs://$(GCS_FES_BUCKET)/
+	@echo ""
+	@echo "Upload complete!"
+	@echo "Bucket: gs://$(GCS_FES_BUCKET)"
+	@echo "Files uploaded:"
+	@gsutil du -sh gs://$(GCS_FES_BUCKET)
+	@echo ""
+	@echo "Monthly cost estimate: ~¥13 (Standard Storage in $(REGION))"
+
+gcs-download-fes: ## Download FES data from Cloud Storage
+	@echo "Downloading FES data from Cloud Storage..."
 	@mkdir -p $(FES_DIR)
-	@curl -u $(FES_USER):$(FES_PASS) \
-		"sftp://$(FES_HOST):$(FES_PORT)$(FES_REMOTE_PATH)/$(FILE)" \
-		-o "$(FES_DIR)/$(FILE)" \
-		--create-dirs --progress-bar
-	@echo "Downloaded to $(FES_DIR)/$(FILE)"
+	@gsutil -m rsync -r gs://$(GCS_FES_BUCKET)/ $(FES_DIR)/
+	@echo "Download complete: $(FES_DIR)/"
+
+gcs-list-fes: ## List FES files in Cloud Storage
+	@echo "Listing FES files in gs://$(GCS_FES_BUCKET)..."
+	@gsutil ls -lh gs://$(GCS_FES_BUCKET)/
+
+gcs-check-fes: ## Check FES data in Cloud Storage
+	@echo "Checking FES data in Cloud Storage..."
+	@echo "Bucket: gs://$(GCS_FES_BUCKET)"
+	@echo "Region: $(REGION)"
+	@echo ""
+	@gsutil du -sh gs://$(GCS_FES_BUCKET)
+	@echo ""
+	@echo "Files:"
+	@gsutil ls gs://$(GCS_FES_BUCKET)/*.nc 2>/dev/null | wc -l | xargs -I {} echo "  NetCDF files: {}"
+	@echo ""
+	@echo "Monthly cost estimate: ~¥13 (Standard Storage)"
+
+gcs-delete-bucket: ## Delete GCS bucket (WARNING: destroys all FES data in cloud)
+	@echo "WARNING: This will delete the bucket and all FES data in Cloud Storage!"
+	@echo "Bucket: gs://$(GCS_FES_BUCKET)"
+	@read -p "Are you sure? [y/N] " confirm; \
+	if [ "$$confirm" = "y" ] || [ "$$confirm" = "Y" ]; then \
+		gsutil -m rm -r gs://$(GCS_FES_BUCKET); \
+		echo "Bucket deleted."; \
+	else \
+		echo "Cancelled."; \
+	fi
 
 .PHONY: install all curl-health curl-constituents curl-tokyo curl-tokyo-extrema
-.PHONY: fes-setup fes-list fes-download-constituent fes-download-major fes-download-all
-.PHONY: fes-check fes-clean fes-mock fes-mock-fast fes-mock-custom fes-download-curl
+.PHONY: fes-setup fes-list fes-download-ocean-tide fes-download-major fes-download-all
+.PHONY: fes-check fes-clean fes-mock fes-mock-fast fes-mock-custom
+.PHONY: gcs-check-project gcs-create-bucket gcs-upload-fes gcs-download-fes gcs-list-fes gcs-check-fes gcs-delete-bucket

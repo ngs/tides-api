@@ -1,33 +1,27 @@
 name: Deploy to Cloud Run
 
 on:
-  push:
+  workflow_run:
+    workflows: ["CI"]
+    types:
+      - completed
     branches:
       - master
       - main
   workflow_dispatch:
-    inputs:
-      deploy_method:
-        description: "Deployment method"
-        required: true
-        default: "source"
-        type: choice
-        options:
-          - source
-          - artifact-registry
-          - cloud-build
 
 env:
   PROJECT_ID: ${{ secrets.PROJECT_ID }}
   REGION: asia-northeast1
   SERVICE_NAME: tides-api
-  REPOSITORY: cloud-run-source-deploy
   FES_DIR: /app/data/fes
+  GCS_FES_BUCKET: tides-app-fes
 
 jobs:
   deploy:
     name: Deploy to Cloud Run
     runs-on: ubuntu-latest
+    if: ${{ github.event.workflow_run.conclusion == 'success' || github.event_name == 'workflow_dispatch' }}
     permissions:
       contents: read
       id-token: write
@@ -51,12 +45,10 @@ jobs:
           gcloud services enable \
             cloudbuild.googleapis.com \
             run.googleapis.com \
-            artifactregistry.googleapis.com \
             storage-api.googleapis.com \
             --project=${{ env.PROJECT_ID }}
 
-      - name: Deploy (Source)
-        if: github.event.inputs.deploy_method == 'source' || github.event.inputs.deploy_method == ''
+      - name: Deploy to Cloud Run
         run: |
           gcloud run deploy ${{ env.SERVICE_NAME }} \
             --source . \
@@ -69,38 +61,10 @@ jobs:
             --cpu 1 \
             --timeout 60s \
             --concurrency 80 \
+            --execution-environment gen2 \
+            --add-volume name=fes-data,type=cloud-storage,bucket=${{ env.GCS_FES_BUCKET }},readonly=true \
+            --add-volume-mount volume=fes-data,mount-path=${{ env.FES_DIR }} \
             --set-env-vars "PORT=8080,DATA_DIR=/app/data,FES_DIR=${{ env.FES_DIR }},TZ=Asia/Tokyo" \
-            --project=${{ env.PROJECT_ID }}
-
-      - name: Deploy (Artifact Registry)
-        if: github.event.inputs.deploy_method == 'artifact-registry'
-        run: |
-          # Build and push image
-          gcloud builds submit \
-            --tag ${{ env.REGION }}-docker.pkg.dev/${{ env.PROJECT_ID }}/${{ env.REPOSITORY }}/${{ env.SERVICE_NAME }}:${{ github.sha }} \
-            --project=${{ env.PROJECT_ID }}
-
-          # Deploy to Cloud Run
-          gcloud run deploy ${{ env.SERVICE_NAME }} \
-            --image ${{ env.REGION }}-docker.pkg.dev/${{ env.PROJECT_ID }}/${{ env.REPOSITORY }}/${{ env.SERVICE_NAME }}:${{ github.sha }} \
-            --region ${{ env.REGION }} \
-            --platform managed \
-            --allow-unauthenticated \
-            --min-instances 0 \
-            --max-instances 10 \
-            --memory 1Gi \
-            --cpu 1 \
-            --timeout 60s \
-            --concurrency 80 \
-            --set-env-vars "PORT=8080,DATA_DIR=/app/data,FES_DIR=${{ env.FES_DIR }},TZ=Asia/Tokyo" \
-            --project=${{ env.PROJECT_ID }}
-
-      - name: Deploy (Cloud Build)
-        if: github.event.inputs.deploy_method == 'cloud-build'
-        run: |
-          gcloud builds submit \
-            --config cloudbuild.yaml \
-            --substitutions _REGION=${{ env.REGION }},_REPOSITORY=${{ env.REPOSITORY }},_SERVICE_NAME=${{ env.SERVICE_NAME }} \
             --project=${{ env.PROJECT_ID }}
 
       - name: Wait for service to be ready
@@ -182,7 +146,7 @@ jobs:
           echo "Service: ${{ env.SERVICE_NAME }}"
           echo "Region: ${{ env.REGION }}"
           echo "URL: $SERVICE_URL"
-          echo "Method: ${{ github.event.inputs.deploy_method || 'source' }}"
+          echo "Method: Source Deploy (Buildpacks)"
           echo ""
           echo "Endpoints:"
           echo "  Health: $SERVICE_URL/healthz"
