@@ -1,6 +1,6 @@
 module go.ngs.io/tides-api
 
-go 1.24.6
+go 1.23
 
 require (
 	github.com/fhs/go-netcdf v1.2.1
