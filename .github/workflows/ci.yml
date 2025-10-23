@@ -122,11 +122,13 @@ jobs:
 
       - name: Show container logs
         if: always()
-        run: docker logs tides-api-test
+        run: docker logs --tail=100 tides-api-test || true
 
-      - name: Stop container
+      - name: Stop and remove container
         if: always()
-        run: docker stop tides-api-test || true
+        run: |
+          docker stop tides-api-test || true
+          docker rm tides-api-test || true
 
   lint:
     name: Lint
