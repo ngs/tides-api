@@ -1,5 +1,8 @@
 # Multi-stage build for minimal final image
 
+# Use specific Alpine version for both stages to ensure NetCDF compatibility
+ARG ALPINE_VERSION=3.22
+
 # Stage 1: Build
 FROM golang:1.23-alpine AS builder
 
@@ -29,7 +32,7 @@ COPY . .
 RUN CGO_ENABLED=1 go build -ldflags="-w -s" -o tides-api ./cmd/server/main.go
 
 # Stage 2: Runtime
-FROM alpine:3.21
+FROM alpine:${ALPINE_VERSION}
 
 # Install runtime dependencies including NetCDF
 RUN apk --no-cache add \
