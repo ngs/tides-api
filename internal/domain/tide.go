@@ -12,6 +12,14 @@ type TideLevel struct {
 	HeightM float64
 }
 
+// LocationMetadata holds additional metadata about a location.
+type LocationMetadata struct {
+	MSL        float64  // Mean Sea Level in meters (relative to reference datum).
+	DepthM     *float64 // Seabed depth in meters (optional, positive value indicates depth below MSL).
+	DatumName  string   // Name of the reference datum (e.g., "EGM2008", "WGS84").
+	SourceName string   // Data source name (e.g., "GEBCO 2024", "DTU21 MSS").
+}
+
 // Extrema represents high and low tide events.
 type Extrema struct {
 	Highs []TideLevel
