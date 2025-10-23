@@ -1,6 +1,7 @@
 package main
 
 import (
+	"flag"
 	"fmt"
 	"log"
 	"os"
@@ -12,7 +13,24 @@ import (
 	"go.ngs.io/tides-api/internal/usecase"
 )
 
+const version = "0.1.0"
+
 func main() {
+	// Parse command-line flags.
+	showHelp := flag.Bool("help", false, "Show usage information")
+	showVersion := flag.Bool("version", false, "Show version information")
+	flag.Parse()
+
+	if *showHelp {
+		printUsage()
+		return
+	}
+
+	if *showVersion {
+		fmt.Printf("tides-api version %s\n", version)
+		return
+	}
+
 	// Load configuration from environment.
 	port := getEnv("PORT", "8080")
 	dataDir := getEnv("DATA_DIR", "./data")
@@ -56,4 +74,33 @@ func getEnv(key, defaultValue string) string {
 		return value
 	}
 	return defaultValue
+}
+
+// printUsage prints usage information.
+func printUsage() {
+	fmt.Printf("Tides API Server v%s\n\n", version)
+	fmt.Println("USAGE:")
+	fmt.Println("  tides-api [flags]")
+	fmt.Println()
+	fmt.Println("FLAGS:")
+	fmt.Println("  -help          Show this help message")
+	fmt.Println("  -version       Show version information")
+	fmt.Println()
+	fmt.Println("ENVIRONMENT VARIABLES:")
+	fmt.Println("  PORT           Server port (default: 8080)")
+	fmt.Println("  DATA_DIR       CSV data directory (default: ./data)")
+	fmt.Println("  FES_DIR        FES NetCDF data directory (default: ./data/fes)")
+	fmt.Println()
+	fmt.Println("EXAMPLES:")
+	fmt.Println("  # Start server with default settings")
+	fmt.Println("  tides-api")
+	fmt.Println()
+	fmt.Println("  # Start server on custom port")
+	fmt.Println("  PORT=3000 tides-api")
+	fmt.Println()
+	fmt.Println("API ENDPOINTS:")
+	fmt.Println("  GET /healthz                   Health check")
+	fmt.Println("  GET /v1/constituents           List tidal constituents")
+	fmt.Println("  GET /v1/tides/predictions      Get tide predictions")
+	fmt.Println()
 }
