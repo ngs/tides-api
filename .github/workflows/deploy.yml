@@ -64,7 +64,7 @@ jobs:
             --execution-environment gen2 \
             --add-volume name=fes-data,type=cloud-storage,bucket=${{ env.GCS_FES_BUCKET }},readonly=true \
             --add-volume-mount volume=fes-data,mount-path=${{ env.FES_DIR }} \
-            --set-env-vars "PORT=8080,DATA_DIR=/app/data,FES_DIR=${{ env.FES_DIR }},TZ=Asia/Tokyo" \
+            --set-env-vars "DATA_DIR=/app/data,FES_DIR=${{ env.FES_DIR }},TZ=Asia/Tokyo" \
             --project=${{ env.PROJECT_ID }}
 
       - name: Wait for service to be ready
