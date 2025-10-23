@@ -26,7 +26,7 @@ RUN go mod download
 COPY . .
 
 # Build binary with CGO for NetCDF support
-RUN CGO_ENABLED=1 GOOS=linux GOARCH=amd64 go build -ldflags="-w -s" -o tides-api ./cmd/server/main.go
+RUN CGO_ENABLED=1 go build -ldflags="-w -s" -o tides-api ./cmd/server/main.go
 
 # Stage 2: Runtime
 FROM alpine:3.21
