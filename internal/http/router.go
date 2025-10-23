@@ -1,6 +1,10 @@
 package http
 
 import (
+	"os"
+	"strings"
+
+	"github.com/gin-contrib/cors"
 	"github.com/gin-gonic/gin"
 
 	"go.ngs.io/tides-api/internal/usecase"
@@ -10,6 +14,20 @@ import (
 func SetupRouter(predictionUC *usecase.PredictionUseCase) *gin.Engine {
 
 	router := gin.Default()
+
+	// Setup CORS middleware.
+	corsConfig := cors.DefaultConfig()
+
+	// Get allowed origins from environment variable.
+	// Default to allow all origins if not specified.
+	allowedOrigins := os.Getenv("CORS_ALLOWED_ORIGINS")
+	if allowedOrigins != "" {
+		corsConfig.AllowOrigins = strings.Split(allowedOrigins, ",")
+	} else {
+		corsConfig.AllowAllOrigins = true
+	}
+
+	router.Use(cors.New(corsConfig))
 
 	// Create handler.
 	handler := NewHandler(predictionUC)

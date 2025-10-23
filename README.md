@@ -410,7 +410,7 @@ FES data is available from [AVISO+](https://www.aviso.altimetry.fr/) and require
 
 For issues, questions, or contributions:
 - Create an issue in the repository
-- Contact: [your-email@example.com]
+- Contact: Atsushi Nagase a@ngs.io
 
 ## Contributing
 
