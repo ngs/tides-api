@@ -8,57 +8,62 @@ import (
 	"go.ngs.io/tides-api/internal/domain"
 )
 
-// PredictionRequest encapsulates a tide prediction request
+const (
+	sourceCSV = "csv"
+	sourceFES = "fes"
+)
+
+// PredictionRequest encapsulates a tide prediction request.
 type PredictionRequest struct {
-	// Location parameters (mutually exclusive with StationID)
+	// Location parameters (mutually exclusive with StationID).
 	Lat *float64
 	Lon *float64
 
-	// Station ID (mutually exclusive with Lat/Lon)
+	// Station ID (mutually exclusive with Lat/Lon).
 	StationID *string
 
-	// Time range
+	// Time range.
 	Start time.Time
 	End   time.Time
 
-	// Interval for predictions (e.g., 10 minutes)
+	// Interval for predictions (e.g., 10 minutes).
 	Interval time.Duration
 
-	// Optional parameters
-	Datum  string // e.g., "MSL", "LAT", "MLLW" - MVP uses MSL only
-	Source string // "csv" or "fes" - if empty, auto-detect
+	// Optional parameters.
+	Datum  string // E.g., "MSL", "LAT", "MLLW" - MVP uses MSL only.
+	Source string // "csv" or "fes" - if empty, auto-detect.
 }
 
-// PredictionResponse contains the tide prediction results
+// PredictionResponse contains the tide prediction results.
 type PredictionResponse struct {
-	Source       string                    `json:"source"`
-	Datum        string                    `json:"datum"`
-	Timezone     string                    `json:"timezone"`
-	Constituents []string                  `json:"constituents"`
-	Predictions  []PredictionPoint         `json:"predictions"`
-	Extrema      ExtremaResponse           `json:"extrema"`
-	Meta         map[string]string         `json:"meta"`
+	Source       string            `json:"source"`
+	Datum        string            `json:"datum"`
+	Timezone     string            `json:"timezone"`
+	Constituents []string          `json:"constituents"`
+	Predictions  []PredictionPoint `json:"predictions"`
+	Extrema      ExtremaResponse   `json:"extrema"`
+	Meta         map[string]string `json:"meta"`
 }
 
-// PredictionPoint represents a single tide height prediction
+// PredictionPoint represents a single tide height prediction.
 type PredictionPoint struct {
-	Time     string  `json:"time"`
-	HeightM  float64 `json:"height_m"`
+	Time    string  `json:"time"`
+	HeightM float64 `json:"height_m"`
 }
 
-// ExtremaResponse contains high and low tides
+// ExtremaResponse contains high and low tides.
 type ExtremaResponse struct {
 	Highs []PredictionPoint `json:"highs"`
 	Lows  []PredictionPoint `json:"lows"`
 }
 
-// PredictionUseCase orchestrates tide prediction
+// PredictionUseCase orchestrates tide prediction.
 type PredictionUseCase struct {
 	csvStore *store.ConstituentLoader
 	fesStore *store.ConstituentLoader
 }
 
-// NewPredictionUseCase creates a new prediction use case
+// NewPredictionUseCase creates a new prediction use case.
 func NewPredictionUseCase(csvStore, fesStore store.ConstituentLoader) *PredictionUseCase {
 	return &PredictionUseCase{
 		csvStore: &csvStore,
@@ -66,9 +71,9 @@ func NewPredictionUseCase(csvStore, fesStore store.ConstituentLoader) *Predictio
 	}
 }
 
-// Validate checks if the request is valid
+// Validate checks if the request is valid.
 func (r *PredictionRequest) Validate() error {
-	// Check mutually exclusive parameters
+	// Check mutually exclusive parameters.
 	hasLatLon := r.Lat != nil && r.Lon != nil
 	hasStationID := r.StationID != nil && *r.StationID != ""
 
@@ -80,7 +85,7 @@ func (r *PredictionRequest) Validate() error {
 		return fmt.Errorf("lat/lon and station_id are mutually exclusive")
 	}
 
-	// Validate lat/lon ranges
+	// Validate lat/lon ranges.
 	if hasLatLon {
 		if *r.Lat < -90 || *r.Lat > 90 {
 			return fmt.Errorf("latitude must be between -90 and 90")
@@ -90,12 +95,12 @@ func (r *PredictionRequest) Validate() error {
 		}
 	}
 
-	// Validate time range
+	// Validate time range.
 	if !r.Start.Before(r.End) {
 		return fmt.Errorf("start time must be before end time")
 	}
 
-	// Validate interval
+	// Validate interval.
 	if r.Interval < time.Minute {
 		return fmt.Errorf("interval must be at least 1 minute")
 	}
@@ -103,13 +108,13 @@ func (r *PredictionRequest) Validate() error {
 		return fmt.Errorf("interval must be at most 6 hours")
 	}
 
-	// Check that time range is reasonable
+	// Check that time range is reasonable.
 	duration := r.End.Sub(r.Start)
 	if duration > 365*24*time.Hour {
 		return fmt.Errorf("time range must be at most 365 days")
 	}
 
-	// Check that number of points is reasonable
+	// Check that number of points is reasonable.
 	numPoints := int(duration / r.Interval)
 	if numPoints > 10000 {
 		return fmt.Errorf("too many prediction points (%d) - reduce time range or increase interval", numPoints)
@@ -118,22 +123,22 @@ func (r *PredictionRequest) Validate() error {
 	return nil
 }
 
-// Execute performs the tide prediction
+// Execute performs the tide prediction.
 func (uc *PredictionUseCase) Execute(req PredictionRequest) (*PredictionResponse, error) {
-	// Validate request
+	// Validate request.
 	if err := req.Validate(); err != nil {
 		return nil, fmt.Errorf("invalid request: %w", err)
 	}
 
-	// Determine source and load constituents
+	// Determine source and load constituents.
 	var constituents []domain.ConstituentParam
 	var source string
 	var err error
 
 	if req.StationID != nil {
-		// Use CSV store for station-based queries
-		source = "csv"
-		if req.Source == "fes" {
+		// Use CSV store for station-based queries.
+		source = sourceCSV
+		if req.Source == sourceFES {
 			return nil, fmt.Errorf("FES source does not support station_id - use lat/lon instead")
 		}
 		constituents, err = (*uc.csvStore).LoadForStation(*req.StationID)
@@ -141,35 +146,35 @@ func (uc *PredictionUseCase) Execute(req PredictionRequest) (*PredictionResponse
 			return nil, fmt.Errorf("failed to load constituents for station %s: %w", *req.StationID, err)
 		}
 	} else {
-		// Use FES store for lat/lon queries (or CSV if explicitly requested)
-		if req.Source == "csv" {
+		// Use FES store for lat/lon queries (or CSV if explicitly requested).
+		if req.Source == sourceCSV {
 			return nil, fmt.Errorf("CSV source does not support lat/lon - use station_id instead")
 		}
-		source = "fes"
+		source = sourceFES
 		constituents, err = (*uc.fesStore).LoadForLocation(*req.Lat, *req.Lon)
 		if err != nil {
 			return nil, fmt.Errorf("failed to load constituents for location (%.4f, %.4f): %w", *req.Lat, *req.Lon, err)
 		}
 	}
 
-	// Set up prediction parameters
+	// Set up prediction parameters.
 	params := domain.PredictionParams{
 		Constituents:    constituents,
-		MSL:             0.0, // MVP: assume MSL = 0
+		MSL:             0.0, // MVP: assume MSL = 0.
 		NodalCorrection: &domain.IdentityNodalCorrection{},
-		ReferenceTime:   time.Unix(0, 0).UTC(), // Use Unix epoch as reference
+		ReferenceTime:   time.Unix(0, 0).UTC(), // Use Unix epoch as reference.
 	}
 
-	// Generate predictions
+	// Generate predictions.
 	predictions := domain.GeneratePredictions(req.Start, req.End, req.Interval, params)
 
-	// Find extrema
+	// Find extrema.
 	extrema := domain.FindExtrema(predictions)
 
-	// Refine extrema with parabolic interpolation
+	// Refine extrema with parabolic interpolation.
 	extrema = domain.RefineExtrema(predictions, extrema)
 
-	// Convert to response format
+	// Convert to response format.
 	predictionPoints := make([]PredictionPoint, len(predictions))
 	for i, p := range predictions {
 		predictionPoints[i] = PredictionPoint{
@@ -194,23 +199,23 @@ func (uc *PredictionUseCase) Execute(req PredictionRequest) (*PredictionResponse
 		}
 	}
 
-	// Extract constituent names
+	// Extract constituent names.
 	constituentNames := make([]string, len(constituents))
 	for i, c := range constituents {
 		constituentNames[i] = c.Name
 	}
 
-	// Determine datum
+	// Determine datum.
 	datum := req.Datum
 	if datum == "" {
 		datum = "MSL"
 	}
 
-	// Build response
+	// Build response.
 	response := &PredictionResponse{
 		Source:       source,
 		Datum:        datum,
-		Timezone:     "+00:00", // UTC
+		Timezone:     "+00:00", // UTC.
 		Constituents: constituentNames,
 		Predictions:  predictionPoints,
 		Extrema: ExtremaResponse{
@@ -222,8 +227,8 @@ func (uc *PredictionUseCase) Execute(req PredictionRequest) (*PredictionResponse
 		},
 	}
 
-	// Add attribution based on source
-	if source == "csv" {
+	// Add attribution based on source.
+	if source == sourceCSV {
 		response.Meta["attribution"] = "Mock CSV (for dev). Replace with FES later."
 	} else {
 		response.Meta["attribution"] = "FES2014/2022 tidal model"
@@ -232,12 +237,12 @@ func (uc *PredictionUseCase) Execute(req PredictionRequest) (*PredictionResponse
 	return response, nil
 }
 
-// GetAllConstituents returns all available constituents
+// GetAllConstituents returns all available constituents.
 func (uc *PredictionUseCase) GetAllConstituents() []domain.Constituent {
 	return domain.GetAllConstituents()
 }
 
-// Helper function to round to decimal places
+// Helper function to round to decimal places.
 func roundToDecimal(val float64, precision int) float64 {
 	multiplier := 1.0
 	for i := 0; i < precision; i++ {

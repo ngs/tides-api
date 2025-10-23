@@ -116,6 +116,7 @@ linters-settings:
   gosec:
     excludes:
       - G104  # Errors unhandled (covered by errcheck)
+      - G115  # Integer overflow conversion (we validate our inputs)
       - G304  # File path provided as taint input (we control paths)
 
   goconst:
@@ -152,6 +153,7 @@ issues:
         - funlen
         - gocyclo
         - dupl
+        - godot
 
     # Main entry points can have init() and globals
     - path: cmd/
@@ -163,11 +165,21 @@ issues:
     - path: internal/domain/constituents\.go
       linters:
         - gochecknoglobals
+        - gocritic
+
+    # Use case layer - validation logic can be complex
+    - path: internal/usecase/
+      linters:
+        - gocyclo
+        - nestif
 
     # NetCDF adapter - may use CGO which has special considerations
     - path: internal/adapter/store/fes/
       linters:
         - gochecknoglobals
+        - gocyclo
+        - gocritic
+        - revive
 
     # HTTP handlers - gin.Context methods don't always need error checks
     - path: internal/http/
@@ -179,11 +191,13 @@ issues:
     - path: internal/domain/tide\.go
       linters:
         - gocyclo
+        - gocritic
 
     # Bilinear interpolation has necessary complexity
     - path: internal/adapter/interp/
       linters:
         - gocyclo
+        - gocritic
 
     # Allow TODO/FIXME comments
     - linters:

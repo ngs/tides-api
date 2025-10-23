@@ -10,21 +10,21 @@ import (
 	"go.ngs.io/tides-api/internal/domain"
 )
 
-// ConstituentStore provides access to tidal constituent data
+// ConstituentStore provides access to tidal constituent data.
 type ConstituentStore struct {
 	dataDir string
 }
 
-// NewConstituentStore creates a new CSV-based constituent store
+// NewConstituentStore creates a new CSV-based constituent store.
 func NewConstituentStore(dataDir string) *ConstituentStore {
 	return &ConstituentStore{
 		dataDir: dataDir,
 	}
 }
 
-// LoadForStation loads constituent parameters for a named station
+// LoadForStation loads constituent parameters for a named station.
 func (s *ConstituentStore) LoadForStation(stationID string) ([]domain.ConstituentParam, error) {
-	// Construct file path
+	// Construct file path.
 	filename := fmt.Sprintf("%s/mock_%s_constituents.csv", s.dataDir, strings.ToLower(stationID))
 
 	file, err := os.Open(filename)
@@ -36,13 +36,13 @@ func (s *ConstituentStore) LoadForStation(stationID string) ([]domain.Constituen
 	reader := csv.NewReader(file)
 	reader.TrimLeadingSpace = true
 
-	// Read header
+	// Read header.
 	header, err := reader.Read()
 	if err != nil {
 		return nil, fmt.Errorf("failed to read CSV header: %w", err)
 	}
 
-	// Validate header
+	// Validate header.
 	expectedHeaders := []string{"constituent", "amplitude_m", "phase_deg"}
 	if len(header) != len(expectedHeaders) {
 		return nil, fmt.Errorf("invalid CSV header: expected %v, got %v", expectedHeaders, header)
@@ -54,13 +54,13 @@ func (s *ConstituentStore) LoadForStation(stationID string) ([]domain.Constituen
 		}
 	}
 
-	// Read data rows
+	// Read data rows.
 	constituents := make([]domain.ConstituentParam, 0)
 
 	for {
 		record, err := reader.Read()
 		if err != nil {
-			// EOF is expected
+			// EOF is expected.
 			if err.Error() == "EOF" {
 				break
 			}
@@ -75,19 +75,19 @@ func (s *ConstituentStore) LoadForStation(stationID string) ([]domain.Constituen
 		amplitudeStr := strings.TrimSpace(record[1])
 		phaseStr := strings.TrimSpace(record[2])
 
-		// Parse amplitude
+		// Parse amplitude.
 		amplitude, err := strconv.ParseFloat(amplitudeStr, 64)
 		if err != nil {
 			return nil, fmt.Errorf("invalid amplitude for constituent %s: %w", name, err)
 		}
 
-		// Parse phase
+		// Parse phase.
 		phase, err := strconv.ParseFloat(phaseStr, 64)
 		if err != nil {
 			return nil, fmt.Errorf("invalid phase for constituent %s: %w", name, err)
 		}
 
-		// Get angular speed from standard constituents
+		// Get angular speed from standard constituents.
 		speed, ok := domain.GetConstituentSpeed(name)
 		if !ok {
 			return nil, fmt.Errorf("unknown constituent: %s", name)
@@ -108,13 +108,13 @@ func (s *ConstituentStore) LoadForStation(stationID string) ([]domain.Constituen
 	return constituents, nil
 }
 
-// LoadForLocation loads constituent parameters for a lat/lon location
-// This is a placeholder for FES integration - currently not supported
+// LoadForLocation loads constituent parameters for a lat/lon location.
+// This is a placeholder for FES integration - currently not supported.
 func (s *ConstituentStore) LoadForLocation(lat, lon float64) ([]domain.ConstituentParam, error) {
 	return nil, fmt.Errorf("CSV store does not support lat/lon queries - use FES store or specify a station_id")
 }
 
-// ListStations returns available station IDs
+// ListStations returns available station IDs.
 func (s *ConstituentStore) ListStations() ([]string, error) {
 	entries, err := os.ReadDir(s.dataDir)
 	if err != nil {
@@ -132,7 +132,7 @@ func (s *ConstituentStore) ListStations() ([]string, error) {
 
 		name := entry.Name()
 		if strings.HasPrefix(name, prefix) && strings.HasSuffix(name, suffix) {
-			// Extract station ID
+			// Extract station ID.
 			stationID := name[len(prefix) : len(name)-len(suffix)]
 			stations = append(stations, stationID)
 		}

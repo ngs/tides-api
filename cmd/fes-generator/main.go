@@ -14,24 +14,24 @@ import (
 	"github.com/fhs/go-netcdf/netcdf"
 )
 
-// ConstituentData holds amplitude and phase for a constituent
+// ConstituentData holds amplitude and phase for a constituent.
 type ConstituentData struct {
 	Name      string
-	Amplitude float64 // meters
-	Phase     float64 // degrees
+	Amplitude float64 // Meters.
+	Phase     float64 // Degrees.
 }
 
-// RegionalGrid defines the geographic bounds and resolution
+// RegionalGrid defines the geographic bounds and resolution.
 type RegionalGrid struct {
 	LatMin     float64
 	LatMax     float64
 	LonMin     float64
 	LonMax     float64
-	Resolution float64 // degrees
+	Resolution float64 // Degrees.
 }
 
 func main() {
-	// Command line flags
+	// Command line flags.
 	csvPath := flag.String("csv", "./data/mock_tokyo_constituents.csv", "Path to CSV file with constituent data")
 	outDir := flag.String("out", "./data/fes", "Output directory for NetCDF files")
 	region := flag.String("region", "japan", "Region: japan, global, or custom")
@@ -45,7 +45,7 @@ func main() {
 
 	flag.Parse()
 
-	// Define grid based on region
+	// Define grid based on region.
 	var grid RegionalGrid
 	switch *region {
 	case "japan":
@@ -62,7 +62,7 @@ func main() {
 			LatMax:     90.0,
 			LonMin:     -180.0,
 			LonMax:     180.0,
-			Resolution: 0.5, // Lower resolution for global
+			Resolution: 0.5, // Lower resolution for global.
 		}
 	case "custom":
 		grid = RegionalGrid{
@@ -76,7 +76,7 @@ func main() {
 		log.Fatalf("Unknown region: %s (use japan, global, or custom)", *region)
 	}
 
-	// Read constituent data from CSV
+	// Read constituent data from CSV.
 	constituents, err := readConstituentCSV(*csvPath)
 	if err != nil {
 		log.Fatalf("Failed to read CSV: %v", err)
@@ -87,12 +87,12 @@ func main() {
 	log.Printf("Grid: %.1f°-%.1f°N, %.1f°-%.1f°E, resolution: %.2f°",
 		grid.LatMin, grid.LatMax, grid.LonMin, grid.LonMax, grid.Resolution)
 
-	// Create output directory
-	if err := os.MkdirAll(*outDir, 0755); err != nil {
+	// Create output directory.
+	if err := os.MkdirAll(*outDir, 0o755); err != nil {
 		log.Fatalf("Failed to create output directory: %v", err)
 	}
 
-	// Generate NetCDF files for each constituent
+	// Generate NetCDF files for each constituent.
 	for _, constituent := range constituents {
 		if err := generateNetCDF(constituent, grid, *tokyoLat, *tokyoLon, *outDir); err != nil {
 			log.Printf("Warning: Failed to generate NetCDF for %s: %v", constituent.Name, err)
@@ -102,22 +102,22 @@ func main() {
 			strings.ToLower(constituent.Name), strings.ToLower(constituent.Name))
 	}
 
-	// Print summary
+	// Print summary.
 	log.Printf("\n=== Generation Complete ===")
 	log.Printf("Files created in: %s", *outDir)
 	log.Printf("Grid size: %d × %d points",
 		int((grid.LatMax-grid.LatMin)/grid.Resolution)+1,
 		int((grid.LonMax-grid.LonMin)/grid.Resolution)+1)
 
-	// Estimate file sizes
+	// Estimate file sizes.
 	nLat := int((grid.LatMax-grid.LatMin)/grid.Resolution) + 1
 	nLon := int((grid.LonMax-grid.LonMin)/grid.Resolution) + 1
-	bytesPerFile := nLat * nLon * 8 // 8 bytes per float64
+	bytesPerFile := nLat * nLon * 8 // 8 bytes per float64.
 	totalMB := float64(bytesPerFile*len(constituents)*2) / 1024 / 1024
 	log.Printf("Total size: ~%.1f MB (%d constituents × 2 files)", totalMB, len(constituents))
 }
 
-// readConstituentCSV reads constituent data from CSV file
+// readConstituentCSV reads constituent data from CSV file.
 func readConstituentCSV(path string) ([]ConstituentData, error) {
 	file, err := os.Open(path)
 	if err != nil {
@@ -128,24 +128,24 @@ func readConstituentCSV(path string) ([]ConstituentData, error) {
 	reader := csv.NewReader(file)
 	reader.TrimLeadingSpace = true
 
-	// Read header
+	// Read header.
 	header, err := reader.Read()
 	if err != nil {
 		return nil, err
 	}
 
-	// Validate header
+	// Validate header.
 	if len(header) != 3 || header[0] != "constituent" ||
 		header[1] != "amplitude_m" || header[2] != "phase_deg" {
 		return nil, fmt.Errorf("invalid CSV header: %v", header)
 	}
 
-	// Read data
-	var constituents []ConstituentData
+	// Read data.
+	constituents := make([]ConstituentData, 0, 10)
 	for {
 		record, err := reader.Read()
 		if err != nil {
-			break // EOF
+			break // EOF.
 		}
 
 		if len(record) != 3 {
@@ -172,9 +172,9 @@ func readConstituentCSV(path string) ([]ConstituentData, error) {
 	return constituents, nil
 }
 
-// generateNetCDF creates amplitude and phase NetCDF files for a constituent
+// generateNetCDF creates amplitude and phase NetCDF files for a constituent.
 func generateNetCDF(constituent ConstituentData, grid RegionalGrid, tokyoLat, tokyoLon float64, outDir string) error {
-	// Create lat/lon arrays
+	// Create lat/lon arrays.
 	nLat := int((grid.LatMax-grid.LatMin)/grid.Resolution) + 1
 	nLon := int((grid.LonMax-grid.LonMin)/grid.Resolution) + 1
 
@@ -188,7 +188,7 @@ func generateNetCDF(constituent ConstituentData, grid RegionalGrid, tokyoLat, to
 		lon[i] = grid.LonMin + float64(i)*grid.Resolution
 	}
 
-	// Generate amplitude and phase grids with spatial variation
+	// Generate amplitude and phase grids with spatial variation.
 	amplitude := make([]float64, nLat*nLon)
 	phase := make([]float64, nLat*nLon)
 
@@ -196,19 +196,19 @@ func generateNetCDF(constituent ConstituentData, grid RegionalGrid, tokyoLat, to
 		for j := 0; j < nLon; j++ {
 			idx := i*nLon + j
 
-			// Distance from Tokyo (reference point)
+			// Distance from Tokyo (reference point).
 			latDist := lat[i] - tokyoLat
 			lonDist := lon[j] - tokyoLon
 			dist := math.Sqrt(latDist*latDist + lonDist*lonDist)
 
-			// Amplitude: decrease with distance from Tokyo, add smooth variation
-			// Use cosine taper: 100% at Tokyo, ~70% at 10° distance
+			// Amplitude: decrease with distance from Tokyo, add smooth variation.
+			// Use cosine taper: 100% at Tokyo, ~70% at 10° distance.
 			distFactor := math.Cos(dist * math.Pi / 20.0)
 			if distFactor < 0.5 {
-				distFactor = 0.5 // Minimum 50% of Tokyo value
+				distFactor = 0.5 // Minimum 50% of Tokyo value.
 			}
 
-			// Add smooth spatial variation (sinusoidal patterns)
+			// Add smooth spatial variation (sinusoidal patterns).
 			spatialVar := 1.0 +
 				0.15*math.Sin(lat[i]*math.Pi/15.0) +
 				0.1*math.Cos(lon[j]*math.Pi/20.0) +
@@ -216,11 +216,11 @@ func generateNetCDF(constituent ConstituentData, grid RegionalGrid, tokyoLat, to
 
 			amplitude[idx] = constituent.Amplitude * distFactor * spatialVar
 
-			// Phase: gradual shift with distance and geographic variation
-			phaseShift := dist * 2.0 // 2 degrees per degree distance
+			// Phase: gradual shift with distance and geographic variation.
+			phaseShift := dist * 2.0 // 2 degrees per degree distance.
 			spatialPhase :=
 				10.0*math.Sin(lat[i]*math.Pi/30.0) +
-				8.0*math.Cos(lon[j]*math.Pi/40.0)
+					8.0*math.Cos(lon[j]*math.Pi/40.0)
 
 			phase[idx] = math.Mod(constituent.Phase+phaseShift+spatialPhase, 360.0)
 			if phase[idx] < 0 {
@@ -229,31 +229,31 @@ func generateNetCDF(constituent ConstituentData, grid RegionalGrid, tokyoLat, to
 		}
 	}
 
-	// Write amplitude file
+	// Write amplitude file.
 	ampPath := filepath.Join(outDir, fmt.Sprintf("%s_amplitude.nc", strings.ToLower(constituent.Name)))
-	if err := writeNetCDF(ampPath, lat, lon, amplitude, nLat, nLon, "amplitude", "meters", constituent.Name); err != nil {
+	if err := writeNetCDF(ampPath, lat, lon, amplitude, nLat, nLon, "amplitude"); err != nil {
 		return err
 	}
 
-	// Write phase file
+	// Write phase file.
 	phaPath := filepath.Join(outDir, fmt.Sprintf("%s_phase.nc", strings.ToLower(constituent.Name)))
-	if err := writeNetCDF(phaPath, lat, lon, phase, nLat, nLon, "phase", "degrees", constituent.Name); err != nil {
+	if err := writeNetCDF(phaPath, lat, lon, phase, nLat, nLon, "phase"); err != nil {
 		return err
 	}
 
 	return nil
 }
 
-// writeNetCDF writes a NetCDF file with the given data
-func writeNetCDF(path string, lat, lon, data []float64, nLat, nLon int, varName, units, constituent string) error {
-	// Create NetCDF file
+// writeNetCDF writes a NetCDF file with the given data.
+func writeNetCDF(path string, lat, lon, data []float64, nLat, nLon int, varName string) error {
+	// Create NetCDF file.
 	ds, err := netcdf.CreateFile(path, netcdf.CLOBBER|netcdf.NETCDF4)
 	if err != nil {
 		return fmt.Errorf("failed to create file: %w", err)
 	}
 	defer ds.Close()
 
-	// Create dimensions
+	// Create dimensions.
 	latDim, err := ds.AddDim("lat", uint64(nLat))
 	if err != nil {
 		return err
@@ -264,29 +264,35 @@ func writeNetCDF(path string, lat, lon, data []float64, nLat, nLon int, varName,
 		return err
 	}
 
-	// Create coordinate variables
+	// Create coordinate variables.
 	latVar, err := ds.AddVar("lat", netcdf.DOUBLE, []netcdf.Dim{latDim})
 	if err != nil {
 		return err
 	}
-	latVar.WriteFloat64s(lat)
-	// Attributes will be optional for MVP
+	if err := latVar.WriteFloat64s(lat); err != nil {
+		return fmt.Errorf("failed to write lat data: %w", err)
+	}
+	// Attributes will be optional for MVP.
 
 	lonVar, err := ds.AddVar("lon", netcdf.DOUBLE, []netcdf.Dim{lonDim})
 	if err != nil {
 		return err
 	}
-	lonVar.WriteFloat64s(lon)
+	if err := lonVar.WriteFloat64s(lon); err != nil {
+		return fmt.Errorf("failed to write lon data: %w", err)
+	}
 
-	// Create data variable
+	// Create data variable.
 	dataVar, err := ds.AddVar(varName, netcdf.DOUBLE, []netcdf.Dim{latDim, lonDim})
 	if err != nil {
 		return err
 	}
-	dataVar.WriteFloat64s(data)
+	if err := dataVar.WriteFloat64s(data); err != nil {
+		return fmt.Errorf("failed to write data: %w", err)
+	}
 
-	// Note: Attributes are optional for basic functionality
-	// The FES loader will work with just lat, lon, and data variables
+	// Note: Attributes are optional for basic functionality.
+	// The FES loader will work with just lat, lon, and data variables.
 
 	return nil
 }

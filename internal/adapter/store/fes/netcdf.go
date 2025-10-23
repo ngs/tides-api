@@ -8,38 +8,39 @@ import (
 	"sync"
 
 	"github.com/fhs/go-netcdf/netcdf"
+
 	"go.ngs.io/tides-api/internal/adapter/interp"
 	"go.ngs.io/tides-api/internal/domain"
 )
 
-// FESStore provides access to FES2014/2022 NetCDF tidal constituent data
+// FESStore provides access to FES2014/2022 NetCDF tidal constituent data.
 type FESStore struct {
 	dataDir string
-	cache   map[string]*FESGrid // Cache loaded grids
-	mu      sync.RWMutex        // Protect cache
+	cache   map[string]*FESGrid // Cache loaded grids.
+	mu      sync.RWMutex        // Protect cache.
 }
 
-// FESGrid holds amplitude and phase grids for a constituent
+// FESGrid holds amplitude and phase grids for a constituent.
 type FESGrid struct {
 	Name      string
 	Amplitude *interp.Grid2D
 	Phase     *interp.Grid2D
 }
 
-// FESFileConfig defines the expected NetCDF file structure
+// FESFileConfig defines the expected NetCDF file structure.
 type FESFileConfig struct {
-	// File naming patterns
-	AmplitudePattern string // e.g., "{constituent}_amplitude.nc"
-	PhasePattern     string // e.g., "{constituent}_phase.nc"
+	// File naming patterns.
+	AmplitudePattern string // E.g., "{constituent}_amplitude.nc".
+	PhasePattern     string // E.g., "{constituent}_phase.nc".
 
-	// Variable names in NetCDF files
-	LatVarName       string // e.g., "lat", "latitude"
-	LonVarName       string // e.g., "lon", "longitude"
-	AmplitudeVarName string // e.g., "amplitude", "amp"
-	PhaseVarName     string // e.g., "phase", "pha"
+	// Variable names in NetCDF files.
+	LatVarName       string // E.g., "lat", "latitude".
+	LonVarName       string // E.g., "lon", "longitude".
+	AmplitudeVarName string // E.g., "amplitude", "amp".
+	PhaseVarName     string // E.g., "phase", "pha".
 }
 
-// DefaultFESConfig returns the default FES file configuration
+// DefaultFESConfig returns the default FES file configuration.
 func DefaultFESConfig() FESFileConfig {
 	return FESFileConfig{
 		AmplitudePattern: "{constituent}_amplitude.nc",
@@ -51,7 +52,7 @@ func DefaultFESConfig() FESFileConfig {
 	}
 }
 
-// NewFESStore creates a new FES NetCDF store
+// NewFESStore creates a new FES NetCDF store.
 func NewFESStore(dataDir string) *FESStore {
 	return &FESStore{
 		dataDir: dataDir,
@@ -60,9 +61,9 @@ func NewFESStore(dataDir string) *FESStore {
 }
 
 // LoadForLocation loads constituent parameters for a lat/lon location
-// using bilinear interpolation from FES NetCDF grids
+// using bilinear interpolation from FES NetCDF grids.
 func (s *FESStore) LoadForLocation(lat, lon float64) ([]domain.ConstituentParam, error) {
-	// Get available constituents
+	// Get available constituents.
 	constituents, err := s.GetAvailableConstituents()
 	if err != nil {
 		return nil, fmt.Errorf("failed to get available constituents: %w", err)
@@ -72,27 +73,27 @@ func (s *FESStore) LoadForLocation(lat, lon float64) ([]domain.ConstituentParam,
 		return nil, fmt.Errorf("no FES NetCDF files found in %s", s.dataDir)
 	}
 
-	// Load and interpolate each constituent
+	// Load and interpolate each constituent.
 	params := make([]domain.ConstituentParam, 0, len(constituents))
 
 	for _, constName := range constituents {
-		// Load grid (uses cache if available)
+		// Load grid (uses cache if available).
 		grid, err := s.loadConstituent(constName)
 		if err != nil {
-			// Skip constituents that fail to load (log warning in production)
+			// Skip constituents that fail to load (log warning in production).
 			continue
 		}
 
-		// Interpolate amplitude and phase at (lat, lon)
+		// Interpolate amplitude and phase at (lat, lon).
 		amplitude, phase, err := interp.InterpolateBoth(grid.Amplitude, grid.Phase, lon, lat)
 		if err != nil {
 			return nil, fmt.Errorf("failed to interpolate %s at (%.4f, %.4f): %w", constName, lat, lon, err)
 		}
 
-		// Get angular speed
+		// Get angular speed.
 		speed, ok := domain.GetConstituentSpeed(constName)
 		if !ok {
-			// Skip unknown constituents
+			// Skip unknown constituents.
 			continue
 		}
 
@@ -111,28 +112,28 @@ func (s *FESStore) LoadForLocation(lat, lon float64) ([]domain.ConstituentParam,
 	return params, nil
 }
 
-// LoadForStation is not supported by FES store (only lat/lon queries)
+// LoadForStation is not supported by FES store (only lat/lon queries).
 func (s *FESStore) LoadForStation(stationID string) ([]domain.ConstituentParam, error) {
 	return nil, fmt.Errorf("FES store does not support station_id queries - use lat/lon parameters")
 }
 
-// GetAvailableConstituents returns the list of constituents available in FES data
+// GetAvailableConstituents returns the list of constituents available in FES data.
 func (s *FESStore) GetAvailableConstituents() ([]string, error) {
-	// Check if dataDir exists
+	// Check if dataDir exists.
 	if _, err := os.Stat(s.dataDir); os.IsNotExist(err) {
 		return nil, fmt.Errorf("FES data directory does not exist: %s", s.dataDir)
 	}
 
-	// Scan directory for NetCDF files
+	// Scan directory for NetCDF files.
 	entries, err := os.ReadDir(s.dataDir)
 	if err != nil {
 		return nil, fmt.Errorf("failed to read FES directory: %w", err)
 	}
 
-	// Map to store unique constituent names
+	// Map to store unique constituent names.
 	constituentMap := make(map[string]bool)
 
-	// Look for amplitude files (e.g., m2_amplitude.nc)
+	// Look for amplitude files (e.g., m2_amplitude.nc).
 	for _, entry := range entries {
 		if entry.IsDir() {
 			continue
@@ -143,27 +144,27 @@ func (s *FESStore) GetAvailableConstituents() ([]string, error) {
 			continue
 		}
 
-		// Extract constituent name
-		// Support patterns: m2_amplitude.nc, m2.nc, m2_amp.nc
+		// Extract constituent name.
+		// Support patterns: m2_amplitude.nc, m2.nc, m2_amp.nc.
 		baseName := strings.TrimSuffix(name, ".nc")
 
-		// Remove common suffixes
+		// Remove common suffixes.
 		for _, suffix := range []string{"_amplitude", "_amp", "_phase", "_pha"} {
 			baseName = strings.TrimSuffix(baseName, suffix)
 		}
 
 		if baseName != "" {
-			// Convert to uppercase for consistency (M2, S2, etc.)
+			// Convert to uppercase for consistency (M2, S2, etc.).
 			constName := strings.ToUpper(baseName)
 
-			// Verify it's a known constituent
+			// Verify it's a known constituent.
 			if _, ok := domain.GetConstituentSpeed(constName); ok {
 				constituentMap[constName] = true
 			}
 		}
 	}
 
-	// Convert map to slice
+	// Convert map to slice.
 	constituents := make([]string, 0, len(constituentMap))
 	for name := range constituentMap {
 		constituents = append(constituents, name)
@@ -172,9 +173,9 @@ func (s *FESStore) GetAvailableConstituents() ([]string, error) {
 	return constituents, nil
 }
 
-// loadConstituent loads amplitude and phase grids for a constituent
+// loadConstituent loads amplitude and phase grids for a constituent.
 func (s *FESStore) loadConstituent(name string) (*FESGrid, error) {
-	// Check cache first
+	// Check cache first.
 	s.mu.RLock()
 	if grid, ok := s.cache[name]; ok {
 		s.mu.RUnlock()
@@ -182,10 +183,10 @@ func (s *FESStore) loadConstituent(name string) (*FESGrid, error) {
 	}
 	s.mu.RUnlock()
 
-	// Load from NetCDF files
+	// Load from NetCDF files.
 	config := DefaultFESConfig()
 
-	// Construct file paths (try multiple patterns)
+	// Construct file paths (try multiple patterns).
 	nameLower := strings.ToLower(name)
 	ampPaths := []string{
 		filepath.Join(s.dataDir, fmt.Sprintf("%s_amplitude.nc", nameLower)),
@@ -196,10 +197,10 @@ func (s *FESStore) loadConstituent(name string) (*FESGrid, error) {
 	phaPaths := []string{
 		filepath.Join(s.dataDir, fmt.Sprintf("%s_phase.nc", nameLower)),
 		filepath.Join(s.dataDir, fmt.Sprintf("%s_pha.nc", nameLower)),
-		filepath.Join(s.dataDir, fmt.Sprintf("%s.nc", nameLower)), // Combined file
+		filepath.Join(s.dataDir, fmt.Sprintf("%s.nc", nameLower)), // Combined file.
 	}
 
-	// Find amplitude file
+	// Find amplitude file.
 	var ampPath string
 	for _, path := range ampPaths {
 		if _, err := os.Stat(path); err == nil {
@@ -211,7 +212,7 @@ func (s *FESStore) loadConstituent(name string) (*FESGrid, error) {
 		return nil, fmt.Errorf("amplitude file not found for constituent %s", name)
 	}
 
-	// Find phase file
+	// Find phase file.
 	var phaPath string
 	for _, path := range phaPaths {
 		if _, err := os.Stat(path); err == nil {
@@ -223,26 +224,26 @@ func (s *FESStore) loadConstituent(name string) (*FESGrid, error) {
 		return nil, fmt.Errorf("phase file not found for constituent %s", name)
 	}
 
-	// Load amplitude grid
+	// Load amplitude grid.
 	ampGrid, err := loadNetCDFGrid(ampPath, config.LatVarName, config.LonVarName, config.AmplitudeVarName)
 	if err != nil {
 		return nil, fmt.Errorf("failed to load amplitude for %s: %w", name, err)
 	}
 
-	// Load phase grid
+	// Load phase grid.
 	phaGrid, err := loadNetCDFGrid(phaPath, config.LatVarName, config.LonVarName, config.PhaseVarName)
 	if err != nil {
 		return nil, fmt.Errorf("failed to load phase for %s: %w", name, err)
 	}
 
-	// Create FES grid
+	// Create FES grid.
 	grid := &FESGrid{
 		Name:      name,
 		Amplitude: ampGrid,
 		Phase:     phaGrid,
 	}
 
-	// Cache the grid
+	// Cache the grid.
 	s.mu.Lock()
 	s.cache[name] = grid
 	s.mu.Unlock()
@@ -250,21 +251,21 @@ func (s *FESStore) loadConstituent(name string) (*FESGrid, error) {
 	return grid, nil
 }
 
-// loadNetCDFGrid reads a 2D grid from a NetCDF file
+// loadNetCDFGrid reads a 2D grid from a NetCDF file.
 func loadNetCDFGrid(filepath, latVarName, lonVarName, dataVarName string) (*interp.Grid2D, error) {
-	// Open NetCDF file
+	// Open NetCDF file.
 	nc, err := netcdf.OpenFile(filepath, netcdf.NOWRITE)
 	if err != nil {
 		return nil, fmt.Errorf("failed to open NetCDF file: %w", err)
 	}
 	defer nc.Close()
 
-	// Try multiple variable name patterns
+	// Try multiple variable name patterns.
 	latNames := []string{latVarName, "latitude", "lat", "y"}
 	lonNames := []string{lonVarName, "longitude", "lon", "x"}
 	dataNames := []string{dataVarName, "data", "z"}
 
-	// Read latitude
+	// Read latitude.
 	var latData []float64
 	var latFound bool
 	for _, name := range latNames {
@@ -280,7 +281,7 @@ func loadNetCDFGrid(filepath, latVarName, lonVarName, dataVarName string) (*inte
 		return nil, fmt.Errorf("latitude variable not found (tried: %v)", latNames)
 	}
 
-	// Read longitude
+	// Read longitude.
 	var lonData []float64
 	var lonFound bool
 	for _, name := range lonNames {
@@ -296,7 +297,7 @@ func loadNetCDFGrid(filepath, latVarName, lonVarName, dataVarName string) (*inte
 		return nil, fmt.Errorf("longitude variable not found (tried: %v)", lonNames)
 	}
 
-	// Read data variable
+	// Read data variable.
 	var dataVar netcdf.Var
 	var dataFound bool
 	for _, name := range dataNames {
@@ -310,7 +311,7 @@ func loadNetCDFGrid(filepath, latVarName, lonVarName, dataVarName string) (*inte
 		return nil, fmt.Errorf("data variable not found (tried: %v)", dataNames)
 	}
 
-	// Read 2D data array
+	// Read 2D data array.
 	dims, err := dataVar.Dims()
 	if err != nil {
 		return nil, fmt.Errorf("failed to get dimensions: %w", err)
@@ -319,21 +320,27 @@ func loadNetCDFGrid(filepath, latVarName, lonVarName, dataVarName string) (*inte
 		return nil, fmt.Errorf("expected 2D data, got %dD", len(dims))
 	}
 
-	// Determine which dimension is lat and which is lon
+	// Determine which dimension is lat and which is lon.
 	nLat := len(latData)
 	nLon := len(lonData)
 
-	dim0Len, _ := dims[0].Len()
-	dim1Len, _ := dims[1].Len()
+	dim0Len, err := dims[0].Len()
+	if err != nil {
+		return nil, fmt.Errorf("failed to get dim0 length: %w", err)
+	}
+	dim1Len, err := dims[1].Len()
+	if err != nil {
+		return nil, fmt.Errorf("failed to get dim1 length: %w", err)
+	}
 
-	// Read data based on dimension order
+	// Read data based on dimension order.
 	var values [][]float64
 
 	if dim0Len == uint64(nLat) && dim1Len == uint64(nLon) {
-		// Data is [lat, lon]
+		// Data is [lat, lon].
 		values, err = read2DFloat64Var(dataVar, nLat, nLon)
 	} else if dim0Len == uint64(nLon) && dim1Len == uint64(nLat) {
-		// Data is [lon, lat] - need to transpose
+		// Data is [lon, lat] - need to transpose.
 		transposed, err := read2DFloat64Var(dataVar, nLon, nLat)
 		if err != nil {
 			return nil, err
@@ -348,14 +355,14 @@ func loadNetCDFGrid(filepath, latVarName, lonVarName, dataVarName string) (*inte
 		return nil, fmt.Errorf("failed to read data: %w", err)
 	}
 
-	// Create Grid2D
+	// Create Grid2D.
 	grid := &interp.Grid2D{
 		X:      lonData,
 		Y:      latData,
 		Values: values,
 	}
 
-	// Validate grid
+	// Validate grid.
 	if err := grid.Validate(); err != nil {
 		return nil, fmt.Errorf("invalid grid: %w", err)
 	}
@@ -363,7 +370,7 @@ func loadNetCDFGrid(filepath, latVarName, lonVarName, dataVarName string) (*inte
 	return grid, nil
 }
 
-// readFloat64Var reads a 1D float64 array from a NetCDF variable
+// readFloat64Var reads a 1D float64 array from a NetCDF variable.
 func readFloat64Var(v netcdf.Var) ([]float64, error) {
 	dims, err := v.Dims()
 	if err != nil {
@@ -387,16 +394,16 @@ func readFloat64Var(v netcdf.Var) ([]float64, error) {
 	return data, nil
 }
 
-// read2DFloat64Var reads a 2D float64 array from a NetCDF variable
+// read2DFloat64Var reads a 2D float64 array from a NetCDF variable.
 func read2DFloat64Var(v netcdf.Var, nRows, nCols int) ([][]float64, error) {
-	// Read as flat array
+	// Read as flat array.
 	flatData := make([]float64, nRows*nCols)
 	err := v.ReadFloat64s(flatData)
 	if err != nil {
 		return nil, err
 	}
 
-	// Convert to 2D array
+	// Convert to 2D array.
 	values := make([][]float64, nRows)
 	for i := 0; i < nRows; i++ {
 		values[i] = flatData[i*nCols : (i+1)*nCols]
@@ -405,7 +412,7 @@ func read2DFloat64Var(v netcdf.Var, nRows, nCols int) ([][]float64, error) {
 	return values, nil
 }
 
-// transpose2D transposes a 2D array
+// transpose2D transposes a 2D array.
 func transpose2D(data [][]float64) [][]float64 {
 	if len(data) == 0 {
 		return data

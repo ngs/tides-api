@@ -6,24 +6,24 @@ import (
 	"time"
 )
 
-// TideLevel represents a single tide height prediction at a specific time
+// TideLevel represents a single tide height prediction at a specific time.
 type TideLevel struct {
-	Time     time.Time
-	HeightM  float64
+	Time    time.Time
+	HeightM float64
 }
 
-// Extrema represents high and low tide events
+// Extrema represents high and low tide events.
 type Extrema struct {
 	Highs []TideLevel
 	Lows  []TideLevel
 }
 
-// PredictionParams holds all parameters needed for tide prediction
+// PredictionParams holds all parameters needed for tide prediction.
 type PredictionParams struct {
-	Constituents     []ConstituentParam
-	MSL              float64          // Mean Sea Level offset in meters
-	NodalCorrection  NodalCorrection  // Interface for nodal corrections
-	ReferenceTime    time.Time        // Reference time for phase (usually Unix epoch or local epoch)
+	Constituents    []ConstituentParam
+	MSL             float64         // Mean Sea Level offset in meters.
+	NodalCorrection NodalCorrection // Interface for nodal corrections.
+	ReferenceTime   time.Time       // Reference time for phase (usually Unix epoch or local epoch).
 }
 
 // CalculateTideHeight computes the tide height at a specific time using harmonic analysis
@@ -43,13 +43,13 @@ func CalculateTideHeight(t time.Time, params PredictionParams) float64 {
 	height := params.MSL
 
 	for _, c := range params.Constituents {
-		// Get nodal corrections
+		// Get nodal corrections.
 		f, u := params.NodalCorrection.GetFactors(c.Name, deltaHours)
 
-		// Calculate phase angle in degrees
+		// Calculate phase angle in degrees.
 		phaseAngleDeg := c.SpeedDegPerHr*deltaHours + c.PhaseDeg - u
 
-		// Convert to radians and calculate contribution
+		// Convert to radians and calculate contribution.
 		phaseAngleRad := Deg2Rad(phaseAngleDeg)
 		contribution := f * c.AmplitudeM * math.Cos(phaseAngleRad)
 
@@ -59,7 +59,7 @@ func CalculateTideHeight(t time.Time, params PredictionParams) float64 {
 	return height
 }
 
-// GeneratePredictions creates a time series of tide predictions
+// GeneratePredictions creates a time series of tide predictions.
 func GeneratePredictions(start, end time.Time, interval time.Duration, params PredictionParams) []TideLevel {
 	predictions := make([]TideLevel, 0)
 
@@ -74,8 +74,8 @@ func GeneratePredictions(start, end time.Time, interval time.Duration, params Pr
 	return predictions
 }
 
-// FindExtrema identifies high and low tides from a time series
-// Uses first derivative sign change to detect peaks and troughs
+// FindExtrema identifies high and low tides from a time series.
+// Uses first derivative sign change to detect peaks and troughs.
 func FindExtrema(predictions []TideLevel) Extrema {
 	if len(predictions) < 3 {
 		return Extrema{
@@ -87,24 +87,24 @@ func FindExtrema(predictions []TideLevel) Extrema {
 	highs := make([]TideLevel, 0)
 	lows := make([]TideLevel, 0)
 
-	// Use first derivative (finite difference) to find sign changes
+	// Use first derivative (finite difference) to find sign changes.
 	for i := 1; i < len(predictions)-1; i++ {
 		prev := predictions[i-1].HeightM
 		curr := predictions[i].HeightM
 		next := predictions[i+1].HeightM
 
-		// Check for local maximum (peak)
+		// Check for local maximum (peak).
 		if curr > prev && curr > next {
 			highs = append(highs, predictions[i])
 		}
 
-		// Check for local minimum (trough)
+		// Check for local minimum (trough).
 		if curr < prev && curr < next {
 			lows = append(lows, predictions[i])
 		}
 
-		// Handle plateau cases (curr == prev or curr == next)
-		// For simplicity, we skip these in MVP
+		// Handle plateau cases (curr == prev or curr == next).
+		// For simplicity, we skip these in MVP.
 	}
 
 	return Extrema{
@@ -113,38 +113,38 @@ func FindExtrema(predictions []TideLevel) Extrema {
 	}
 }
 
-// RefineExtremum performs parabolic interpolation to get a more accurate extremum
-// Uses three points around the discrete extremum to fit a parabola
-// Returns the interpolated time and height
+// RefineExtremum performs parabolic interpolation to get a more accurate extremum.
+// Uses three points around the discrete extremum to fit a parabola.
+// Returns the interpolated time and height.
 func RefineExtremum(before, peak, after TideLevel) (time.Time, float64) {
-	// Time spacing in hours
+	// Time spacing in hours.
 	dt1 := peak.Time.Sub(before.Time).Hours()
 	dt2 := after.Time.Sub(peak.Time).Hours()
 
-	// For simplicity, assume uniform spacing
+	// For simplicity, assume uniform spacing.
 	if math.Abs(dt1-dt2) > 1e-6 {
-		// Non-uniform spacing - return discrete peak
+		// Non-uniform spacing - return discrete peak.
 		return peak.Time, peak.HeightM
 	}
 
 	// Parabolic interpolation
 	// y = a*x^2 + b*x + c
-	// Vertex at x = -b/(2a)
+	// Vertex at x = -b/(2a).
 	h0, h1, h2 := before.HeightM, peak.HeightM, after.HeightM
 
-	// Using finite differences
+	// Using finite differences.
 	a := (h2 - 2*h1 + h0) / (2 * dt1 * dt1)
 	b := (h2 - h0) / (2 * dt1)
 
 	if math.Abs(a) < 1e-10 {
-		// Nearly linear - return discrete peak
+		// Nearly linear - return discrete peak.
 		return peak.Time, peak.HeightM
 	}
 
-	// Time offset from peak for the vertex
+	// Time offset from peak for the vertex.
 	dtVertex := -b / (2 * a)
 
-	// Clamp to reasonable range (within interval)
+	// Clamp to reasonable range (within interval).
 	if math.Abs(dtVertex) > dt1 {
 		return peak.Time, peak.HeightM
 	}
@@ -155,13 +155,13 @@ func RefineExtremum(before, peak, after TideLevel) (time.Time, float64) {
 	return refinedTime, refinedHeight
 }
 
-// RefineExtrema applies parabolic interpolation to all extrema
+// RefineExtrema applies parabolic interpolation to all extrema.
 func RefineExtrema(predictions []TideLevel, extrema Extrema) Extrema {
 	if len(predictions) < 3 {
 		return extrema
 	}
 
-	// Create a map for quick lookup
+	// Create a map for quick lookup.
 	predMap := make(map[time.Time]int)
 	for i, p := range predictions {
 		predMap[p.Time] = i
@@ -207,7 +207,7 @@ func RefineExtrema(predictions []TideLevel, extrema Extrema) Extrema {
 		})
 	}
 
-	// Sort by time
+	// Sort by time.
 	sort.Slice(refinedHighs, func(i, j int) bool {
 		return refinedHighs[i].Time.Before(refinedHighs[j].Time)
 	})

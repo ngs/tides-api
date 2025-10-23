@@ -7,25 +7,26 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
+
 	"go.ngs.io/tides-api/internal/domain"
 	"go.ngs.io/tides-api/internal/usecase"
 )
 
-// Handler handles HTTP requests for tide predictions
+// Handler handles HTTP requests for tide predictions.
 type Handler struct {
 	predictionUC *usecase.PredictionUseCase
 }
 
-// NewHandler creates a new HTTP handler
+// NewHandler creates a new HTTP handler.
 func NewHandler(predictionUC *usecase.PredictionUseCase) *Handler {
 	return &Handler{
 		predictionUC: predictionUC,
 	}
 }
 
-// GetPredictions handles GET /v1/tides/predictions
+// GetPredictions handles GET /v1/tides/predictions.
 func (h *Handler) GetPredictions(c *gin.Context) {
-	// Parse query parameters
+	// Parse query parameters.
 	latStr := c.Query("lat")
 	lonStr := c.Query("lon")
 	stationID := c.Query("station_id")
@@ -35,13 +36,13 @@ func (h *Handler) GetPredictions(c *gin.Context) {
 	datum := c.Query("datum")
 	source := c.Query("source")
 
-	// Build request
+	// Build request.
 	req := usecase.PredictionRequest{
 		Datum:  datum,
 		Source: source,
 	}
 
-	// Parse lat/lon
+	// Parse lat/lon.
 	if latStr != "" && lonStr != "" {
 		lat, err := strconv.ParseFloat(latStr, 64)
 		if err != nil {
@@ -57,12 +58,12 @@ func (h *Handler) GetPredictions(c *gin.Context) {
 		req.Lon = &lon
 	}
 
-	// Parse station ID
+	// Parse station ID.
 	if stationID != "" {
 		req.StationID = &stationID
 	}
 
-	// Parse time range
+	// Parse time range.
 	if startStr == "" {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "start parameter is required"})
 		return
@@ -87,7 +88,7 @@ func (h *Handler) GetPredictions(c *gin.Context) {
 	req.Start = start.UTC()
 	req.End = end.UTC()
 
-	// Parse interval (default: 10m)
+	// Parse interval (default: 10m).
 	if intervalStr == "" {
 		intervalStr = "10m"
 	}
@@ -99,7 +100,7 @@ func (h *Handler) GetPredictions(c *gin.Context) {
 	}
 	req.Interval = interval
 
-	// Execute use case
+	// Execute use case.
 	response, err := h.predictionUC.Execute(req)
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
@@ -109,11 +110,11 @@ func (h *Handler) GetPredictions(c *gin.Context) {
 	c.JSON(http.StatusOK, response)
 }
 
-// GetConstituents handles GET /v1/constituents
+// GetConstituents handles GET /v1/constituents.
 func (h *Handler) GetConstituents(c *gin.Context) {
 	constituents := h.predictionUC.GetAllConstituents()
 
-	// Convert to response format
+	// Convert to response format.
 	type ConstituentInfo struct {
 		Name          string  `json:"name"`
 		SpeedDegPerHr float64 `json:"speed_deg_per_hr"`
@@ -132,7 +133,7 @@ func (h *Handler) GetConstituents(c *gin.Context) {
 	})
 }
 
-// HealthCheck handles GET /healthz
+// HealthCheck handles GET /healthz.
 func (h *Handler) HealthCheck(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{
 		"status": "ok",
@@ -140,18 +141,18 @@ func (h *Handler) HealthCheck(c *gin.Context) {
 	})
 }
 
-// ConstituentListResponse is the response for listing constituents
+// ConstituentListResponse is the response for listing constituents.
 type ConstituentListResponse struct {
 	Name          string  `json:"name"`
 	SpeedDegPerHr float64 `json:"speed_deg_per_hr"`
 	Description   string  `json:"description,omitempty"`
 }
 
-// GetConstituentsList returns a detailed list of all constituents
+// GetConstituentsList returns a detailed list of all constituents.
 func (h *Handler) GetConstituentsList(c *gin.Context) {
 	constituents := domain.GetAllConstituents()
 
-	// Add descriptions for major constituents
+	// Add descriptions for major constituents.
 	descriptions := map[string]string{
 		"M2":  "Principal lunar semidiurnal",
 		"S2":  "Principal solar semidiurnal",
