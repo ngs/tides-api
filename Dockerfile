@@ -29,7 +29,7 @@ COPY . .
 RUN CGO_ENABLED=1 GOOS=linux GOARCH=amd64 go build -ldflags="-w -s" -o tides-api ./cmd/server/main.go
 
 # Stage 2: Runtime
-FROM alpine:3.20
+FROM alpine:3.21
 
 # Install runtime dependencies including NetCDF
 RUN apk --no-cache add \
