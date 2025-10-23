@@ -24,7 +24,7 @@ func SetupRouter(predictionUC *usecase.PredictionUseCase) *gin.Engine {
 	v1.GET("/constituents", handler.GetConstituentsList)
 
 	// Health check.
-	router.GET("/healthz", handler.HealthCheck)
+	router.GET("/health", handler.HealthCheck)
 
 	return router
 }

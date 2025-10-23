@@ -58,7 +58,7 @@ func main() {
 	// Start server.
 	addr := fmt.Sprintf(":%s", port)
 	log.Printf("Server listening on %s", addr)
-	log.Printf("Health check: http://localhost:%s/healthz", port)
+	log.Printf("Health check: http://localhost:%s/health", port)
 	log.Printf("API endpoints:")
 	log.Printf("  - GET /v1/tides/predictions")
 	log.Printf("  - GET /v1/constituents")
@@ -99,7 +99,7 @@ func printUsage() {
 	fmt.Println("  PORT=3000 tides-api")
 	fmt.Println()
 	fmt.Println("API ENDPOINTS:")
-	fmt.Println("  GET /healthz                   Health check")
+	fmt.Println("  GET /health                    Health check")
 	fmt.Println("  GET /v1/constituents           List tidal constituents")
 	fmt.Println("  GET /v1/tides/predictions      Get tide predictions")
 	fmt.Println()

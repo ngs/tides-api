@@ -89,7 +89,7 @@ jobs:
         run: |
           echo "Waiting for service to start..."
           for i in {1..30}; do
-            if curl -f http://localhost:8080/healthz; then
+            if curl -f http://localhost:8080/health; then
               echo "Service is ready!"
               exit 0
             fi
@@ -102,8 +102,8 @@ jobs:
 
       - name: Test health endpoint
         run: |
-          curl -v http://localhost:8080/healthz
-          curl -s http://localhost:8080/healthz | jq .
+          curl -v http://localhost:8080/health
+          curl -s http://localhost:8080/health | jq .
 
       - name: Test constituents endpoint
         run: |

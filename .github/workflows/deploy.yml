@@ -78,7 +78,7 @@ jobs:
           echo "Waiting for service to be ready..."
 
           for i in {1..30}; do
-            if curl -f "$SERVICE_URL/healthz"; then
+            if curl -f "$SERVICE_URL/health"; then
               echo "Service is ready!"
               exit 0
             fi
@@ -97,8 +97,8 @@ jobs:
             --format 'value(status.url)')
 
           echo "Testing health endpoint..."
-          curl -v "$SERVICE_URL/healthz"
-          curl -s "$SERVICE_URL/healthz" | jq .
+          curl -v "$SERVICE_URL/health"
+          curl -s "$SERVICE_URL/health" | jq .
 
       - name: Test constituents endpoint
         run: |
@@ -149,7 +149,7 @@ jobs:
           echo "Method: Source Deploy (Buildpacks)"
           echo ""
           echo "Endpoints:"
-          echo "  Health: $SERVICE_URL/healthz"
+          echo "  Health: $SERVICE_URL/health"
           echo "  Constituents: $SERVICE_URL/v1/constituents"
           echo "  Predictions: $SERVICE_URL/v1/tides/predictions"
           echo ""
