@@ -306,12 +306,15 @@ gcs-delete-bucket: ## Delete GCS bucket (WARNING: destroys all FES data in cloud
 		echo "Cancelled."; \
 	fi
 
-# Bathymetry data management
+# Bathymetry and geoid data management
 BATHY_DIR := ./data/bathymetry
 GEBCO_URL := https://dap.ceda.ac.uk/bodc/gebco/global/gebco_2025/ice_surface_elevation/netcdf/gebco_2025.zip?download=1
 GEBCO_FILE := GEBCO_2025.nc
 DTU_MSS_URL := https://data.dtu.dk/ndownloader/files/53106539
 DTU_MSS_FILE := DTU21MSS_1min_WGS84.nc
+EGM2008_URL := https://earth-info.nga.mil/php/download.php?file=egm-08-raster
+EGM2008_FILE := egm2008-1.pgm
+EGM2008_NC := egm2008_1m.nc
 USER_AGENT := Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/141.0.0.0 Safari/537.36
 
 bathy-setup: ## Create bathymetry data directory
@@ -375,7 +378,40 @@ bathy-download-dtu-mss: ## Download DTU21 Mean Sea Surface data (~500MB)
 		ls -lh $(DTU_MSS_FILE); \
 	fi
 
-bathy-download-all: bathy-setup bathy-download-dtu-mss bathy-download-gebco ## Download all bathymetry data
+geoid-download-egm2008: ## Download EGM2008 geoid data (~100MB, requires GMT)
+	@echo "Downloading EGM2008 geoid data..."
+	@echo "Size: ~100MB (1 arc-minute resolution)"
+	@echo "Source: NASA/NGA Earth Gravitational Model 2008"
+	@echo "License: Public Domain"
+	@echo ""
+	@mkdir -p $(BATHY_DIR)
+	@if [ -f "$(BATHY_DIR)/$(EGM2008_NC)" ]; then \
+		echo "✓ EGM2008 file already exists: $(BATHY_DIR)/$(EGM2008_NC)"; \
+		echo "Skipping download."; \
+		ls -lh $(BATHY_DIR)/$(EGM2008_NC); \
+	else \
+		echo "Checking for GMT (Generic Mapping Tools)..."; \
+		if command -v gmt >/dev/null 2>&1; then \
+			echo "✓ GMT found, downloading geoid grid..."; \
+			echo "Note: This uses GMT's @earth_geoid_01m remote dataset"; \
+			cd $(BATHY_DIR) && \
+			gmt grdcut @earth_geoid_01m -R-180/180/-90/90 -G$(EGM2008_NC) && \
+			echo "" && \
+			echo "Download complete: $(BATHY_DIR)/$(EGM2008_NC)" && \
+			ls -lh $(EGM2008_NC); \
+		else \
+			echo "✗ GMT not found. Please install GMT first:"; \
+			echo "  brew install gmt  (macOS)"; \
+			echo "  apt-get install gmt  (Ubuntu/Debian)"; \
+			echo ""; \
+			echo "Alternative: Download manually from:"; \
+			echo "  https://earth-info.nga.mil/index.php?dir=wgs84&action=wgs84#tab_egm2008"; \
+			echo "  Then convert PGM to NetCDF using GDAL or GMT"; \
+			exit 1; \
+		fi; \
+	fi
+
+bathy-download-all: bathy-setup bathy-download-dtu-mss bathy-download-gebco geoid-download-egm2008 ## Download all bathymetry and geoid data
 
 bathy-check: ## Check downloaded bathymetry files
 	@echo "Checking bathymetry data files in $(BATHY_DIR)..."
@@ -477,5 +513,5 @@ gcs-check-bathy: ## Check bathymetry data in Cloud Storage
 .PHONY: fes-setup fes-list fes-download-ocean-tide fes-download-major fes-download-all
 .PHONY: fes-check fes-clean fes-mock fes-mock-fast fes-mock-custom
 .PHONY: gcs-check-project gcs-create-bucket gcs-upload-fes gcs-download-fes gcs-list-fes gcs-check-fes gcs-delete-bucket
-.PHONY: bathy-setup bathy-download-gebco bathy-download-dtu-mss bathy-download-all bathy-check bathy-clean
+.PHONY: bathy-setup bathy-download-gebco bathy-download-dtu-mss geoid-download-egm2008 bathy-download-all bathy-check bathy-clean
 .PHONY: gcs-create-bathy-bucket gcs-upload-bathy gcs-download-bathy gcs-list-bathy gcs-check-bathy

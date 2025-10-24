@@ -7,6 +7,7 @@ import (
 
 	"github.com/fhs/go-netcdf/netcdf"
 
+	"go.ngs.io/tides-api/internal/adapter/geoid"
 	"go.ngs.io/tides-api/internal/adapter/interp"
 	"go.ngs.io/tides-api/internal/domain"
 )
@@ -14,8 +15,9 @@ import (
 // LocalStore loads bathymetry and MSL data from local NetCDF files.
 // These files can be local disk files or GCS FUSE-mounted files.
 type LocalStore struct {
-	gebcoPath string // Path to GEBCO NetCDF file (e.g., /mnt/bathymetry/gebco_2024.nc).
-	mssPath   string // Path to MSS NetCDF file (e.g., /mnt/bathymetry/dtu21_mss.nc).
+	gebcoPath  string // Path to GEBCO NetCDF file (e.g., /mnt/bathymetry/gebco_2024.nc).
+	mssPath    string // Path to MSS NetCDF file (e.g., /mnt/bathymetry/dtu21_mss.nc).
+	geoidStore *geoid.Store
 
 	// Cached grids (loaded on demand).
 	depthGrid *interp.Grid2D
@@ -25,10 +27,11 @@ type LocalStore struct {
 
 // NewLocalStore creates a new local file-based bathymetry store.
 // Paths can point to GCS FUSE-mounted files (e.g., /mnt/bathymetry/data.nc).
-func NewLocalStore(gebcoPath, mssPath string) *LocalStore {
+func NewLocalStore(gebcoPath, mssPath string, geoidStore *geoid.Store) *LocalStore {
 	return &LocalStore{
-		gebcoPath: gebcoPath,
-		mssPath:   mssPath,
+		gebcoPath:  gebcoPath,
+		mssPath:    mssPath,
+		geoidStore: geoidStore,
 	}
 }
 
@@ -71,6 +74,22 @@ func (s *LocalStore) GetMetadata(lat, lon float64) (*domain.LocationMetadata, er
 			// If interpolation fails (e.g., out of bounds), return nil.
 			return nil, nil
 		}
+
+		// DTU21 MSS is referenced to WGS84 ellipsoid.
+		// Apply geoid correction to convert to orthometric height (local datum).
+		// H (orthometric) = h (ellipsoidal) - N (geoid height).
+		if s.geoidStore != nil {
+			geoidHeight, err := s.geoidStore.GetGeoidHeight(lat, lon)
+			if err == nil {
+				// Apply correction: subtract geoid height from ellipsoidal MSL.
+				msl -= geoidHeight
+				metadata.DatumName = "EGM2008 (geoid-corrected)"
+			} else {
+				// Log warning but continue with uncorrected value.
+				fmt.Fprintf(os.Stderr, "Warning: geoid correction failed: %v\n", err)
+			}
+		}
+
 		metadata.MSL = msl
 		metadata.SourceName = "DTU21 MSS"
 	}
@@ -304,12 +323,22 @@ func read2DFloat64Var(v netcdf.Var, nRows, nCols int) ([][]float64, error) {
 
 	// Read data based on type.
 	switch varType {
-	case netcdf.DOUBLE, netcdf.FLOAT:
-		// Read as float64 directly.
+	case netcdf.DOUBLE:
 		flatData = make([]float64, totalSize)
 		err = v.ReadFloat64s(flatData)
 		if err != nil {
 			return nil, fmt.Errorf("failed to read float64: %w", err)
+		}
+	case netcdf.FLOAT:
+		// Read as float32 and convert to float64.
+		float32Data := make([]float32, totalSize)
+		err = v.ReadFloat32s(float32Data)
+		if err != nil {
+			return nil, fmt.Errorf("failed to read float32: %w", err)
+		}
+		flatData = make([]float64, totalSize)
+		for i, val := range float32Data {
+			flatData[i] = float64(val)
 		}
 	case netcdf.SHORT:
 		// Read as int16 and convert to float64.
