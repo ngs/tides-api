@@ -129,7 +129,7 @@ func (s *LocalStore) Close() error {
 	return nil
 }
 
-// loadNetCDFGrid reads a 2D grid from a NetCDF file.
+// LoadNetCDFGrid reads a 2D grid from a NetCDF file.
 // This is similar to the FES loader but with different variable names.
 func loadNetCDFGrid(filepath, latVarName, lonVarName, dataVarName string) (*interp.Grid2D, error) {
 	// Open NetCDF file.
@@ -215,17 +215,34 @@ func loadNetCDFGrid(filepath, latVarName, lonVarName, dataVarName string) (*inte
 	// Read data based on dimension order.
 	var values [][]float64
 
-	if dim0Len == uint64(nLat) && dim1Len == uint64(nLon) {
+	// Determine dimension ordering.
+	type dimOrder int
+	const (
+		latLonOrder dimOrder = iota
+		lonLatOrder
+		unknownOrder
+	)
+
+	order := unknownOrder
+	switch {
+	case dim0Len == uint64(nLat) && dim1Len == uint64(nLon):
+		order = latLonOrder
+	case dim0Len == uint64(nLon) && dim1Len == uint64(nLat):
+		order = lonLatOrder
+	}
+
+	switch order {
+	case latLonOrder:
 		// Data is [lat, lon].
 		values, err = read2DFloat64Var(dataVar, nLat, nLon)
-	} else if dim0Len == uint64(nLon) && dim1Len == uint64(nLat) {
+	case lonLatOrder:
 		// Data is [lon, lat] - need to transpose.
 		transposed, err := read2DFloat64Var(dataVar, nLon, nLat)
 		if err != nil {
 			return nil, err
 		}
 		values = transpose2D(transposed)
-	} else {
+	default:
 		return nil, fmt.Errorf("dimension mismatch: data is [%d, %d], expected [%d, %d] or [%d, %d]",
 			dim0Len, dim1Len, nLat, nLon, nLon, nLat)
 	}

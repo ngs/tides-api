@@ -235,9 +235,9 @@ func (h *Handler) GetBathymetry(c *gin.Context) {
 			"lat": lat,
 			"lon": lon,
 		},
-		"msl_m":       metadata.MSL,
-		"datum_name":  metadata.DatumName,
-		"source":      metadata.SourceName,
+		"msl_m":      metadata.MSL,
+		"datum_name": metadata.DatumName,
+		"source":     metadata.SourceName,
 	}
 
 	if metadata.DepthM != nil {

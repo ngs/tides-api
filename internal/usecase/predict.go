@@ -202,14 +202,14 @@ func (uc *PredictionUseCase) Execute(req PredictionRequest) (*PredictionResponse
 	for i, p := range predictions {
 		point := PredictionPoint{
 			Time:    p.Time.UTC().Format(time.RFC3339),
-			HeightM: roundToDecimal(p.HeightM, 3),
+			HeightM: roundToDecimal(p.HeightM),
 		}
 
 		// Calculate water depth if seabed depth is available.
 		// Water depth = seabed_depth + msl + tide_height.
 		if metadata != nil && metadata.DepthM != nil {
 			waterDepth := *metadata.DepthM + msl + p.HeightM
-			roundedDepth := roundToDecimal(waterDepth, 3)
+			roundedDepth := roundToDecimal(waterDepth)
 			point.DepthM = &roundedDepth
 		}
 
@@ -220,13 +220,13 @@ func (uc *PredictionUseCase) Execute(req PredictionRequest) (*PredictionResponse
 	for i, h := range extrema.Highs {
 		point := PredictionPoint{
 			Time:    h.Time.UTC().Format(time.RFC3339),
-			HeightM: roundToDecimal(h.HeightM, 3),
+			HeightM: roundToDecimal(h.HeightM),
 		}
 
 		// Calculate water depth if seabed depth is available.
 		if metadata != nil && metadata.DepthM != nil {
 			waterDepth := *metadata.DepthM + msl + h.HeightM
-			roundedDepth := roundToDecimal(waterDepth, 3)
+			roundedDepth := roundToDecimal(waterDepth)
 			point.DepthM = &roundedDepth
 		}
 
@@ -237,13 +237,13 @@ func (uc *PredictionUseCase) Execute(req PredictionRequest) (*PredictionResponse
 	for i, l := range extrema.Lows {
 		point := PredictionPoint{
 			Time:    l.Time.UTC().Format(time.RFC3339),
-			HeightM: roundToDecimal(l.HeightM, 3),
+			HeightM: roundToDecimal(l.HeightM),
 		}
 
 		// Calculate water depth if seabed depth is available.
 		if metadata != nil && metadata.DepthM != nil {
 			waterDepth := *metadata.DepthM + msl + l.HeightM
-			roundedDepth := roundToDecimal(waterDepth, 3)
+			roundedDepth := roundToDecimal(waterDepth)
 			point.DepthM = &roundedDepth
 		}
 
@@ -327,11 +327,8 @@ func (uc *PredictionUseCase) GetBathymetry(lat, lon float64) (*domain.LocationMe
 	return metadata, nil
 }
 
-// Helper function to round to decimal places.
-func roundToDecimal(val float64, precision int) float64 {
-	multiplier := 1.0
-	for i := 0; i < precision; i++ {
-		multiplier *= 10
-	}
+// Helper function to round to 3 decimal places.
+func roundToDecimal(val float64) float64 {
+	multiplier := 1000.0
 	return float64(int(val*multiplier+0.5)) / multiplier
 }
