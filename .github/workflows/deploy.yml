@@ -61,7 +61,7 @@ jobs:
             --max-instances 10 \
             --memory 8Gi \
             --cpu 4 \
-            --timeout 60s \
+            --timeout 300s \
             --concurrency 80 \
             --execution-environment gen2 \
             --add-volume name=fes-data,type=cloud-storage,bucket=${{ env.GCS_FES_BUCKET }},readonly=true \
