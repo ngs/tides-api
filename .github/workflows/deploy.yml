@@ -59,8 +59,8 @@ jobs:
             --allow-unauthenticated \
             --min-instances 0 \
             --max-instances 10 \
-            --memory 2Gi \
-            --cpu 2 \
+            --memory 8Gi \
+            --cpu 4 \
             --timeout 60s \
             --concurrency 80 \
             --execution-environment gen2 \
