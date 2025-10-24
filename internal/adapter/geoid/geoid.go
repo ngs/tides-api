@@ -2,6 +2,7 @@ package geoid
 
 import (
 	"fmt"
+	"math"
 	"sync"
 
 	"github.com/fhs/go-netcdf/netcdf"
@@ -36,7 +37,7 @@ func (s *Store) GetGeoidHeight(lat, lon float64) (float64, error) {
 
 	// Load grid on first access.
 	if s.grid == nil {
-		if err := s.loadGrid(); err != nil {
+		if err := s.loadGrid(lat, lon); err != nil {
 			return 0, fmt.Errorf("failed to load geoid grid: %w", err)
 		}
 	}
@@ -50,8 +51,8 @@ func (s *Store) GetGeoidHeight(lat, lon float64) (float64, error) {
 	return height, nil
 }
 
-// loadGrid loads the EGM2008 NetCDF grid.
-func (s *Store) loadGrid() error {
+// loadGrid loads a subset of the EGM2008 NetCDF grid around the target location.
+func (s *Store) loadGrid(targetLat, targetLon float64) error {
 	nc, err := netcdf.OpenFile(s.geoidPath, netcdf.NOWRITE)
 	if err != nil {
 		return fmt.Errorf("failed to open NetCDF file: %w", err)
@@ -95,6 +96,31 @@ func (s *Store) loadGrid() error {
 		return fmt.Errorf("longitude variable not found (tried: %v)", lonNames)
 	}
 
+	// Calculate subset indices with ±2 degree margin.
+	const margin = 2.0 // Degrees.
+	latStartIdx := findNearestIndex(latData, targetLat-margin)
+	latEndIdx := findNearestIndex(latData, targetLat+margin)
+	lonStartIdx := findNearestIndex(lonData, targetLon-margin)
+	lonEndIdx := findNearestIndex(lonData, targetLon+margin)
+
+	// Ensure proper ordering (start <= end).
+	if latStartIdx > latEndIdx {
+		latStartIdx, latEndIdx = latEndIdx, latStartIdx
+	}
+	if lonStartIdx > lonEndIdx {
+		lonStartIdx, lonEndIdx = lonEndIdx, lonStartIdx
+	}
+
+	// Clamp to valid ranges and ensure we have at least 2 points.
+	latStart := clamp(latStartIdx, 0, len(latData)-2)
+	latEnd := clamp(latEndIdx+1, latStart+2, len(latData))
+	lonStart := clamp(lonStartIdx, 0, len(lonData)-2)
+	lonEnd := clamp(lonEndIdx+1, lonStart+2, len(lonData))
+
+	// Extract subset of coordinate arrays.
+	subsetLat := latData[latStart:latEnd]
+	subsetLon := lonData[lonStart:lonEnd]
+
 	// Read geoid height data.
 	var dataVar netcdf.Var
 	var dataFound bool
@@ -130,15 +156,19 @@ func (s *Store) loadGrid() error {
 		return fmt.Errorf("failed to get dim1 length: %w", err)
 	}
 
+	// Calculate subset dimensions.
+	nSubsetLat := latEnd - latStart
+	nSubsetLon := lonEnd - lonStart
+
 	// Determine dimension ordering.
 	var values [][]float64
 	switch {
 	case dim0Len == uint64(nLat) && dim1Len == uint64(nLon):
 		// Data is [lat, lon].
-		values, err = read2DFloat64Var(dataVar, nLat, nLon)
+		values, err = read2DFloat64VarSubset(dataVar, latStart, lonStart, nSubsetLat, nSubsetLon)
 	case dim0Len == uint64(nLon) && dim1Len == uint64(nLat):
 		// Data is [lon, lat] - need to transpose.
-		transposed, err := read2DFloat64Var(dataVar, nLon, nLat)
+		transposed, err := read2DFloat64VarSubset(dataVar, lonStart, latStart, nSubsetLon, nSubsetLat)
 		if err != nil {
 			return err
 		}
@@ -152,10 +182,10 @@ func (s *Store) loadGrid() error {
 		return fmt.Errorf("failed to read data: %w", err)
 	}
 
-	// Create Grid2D.
+	// Create Grid2D with subset data.
 	s.grid = &interp.Grid2D{
-		X:      lonData,
-		Y:      latData,
+		X:      subsetLon,
+		Y:      subsetLat,
 		Values: values,
 	}
 
@@ -191,8 +221,36 @@ func readFloat64Var(v netcdf.Var) ([]float64, error) {
 	return data, nil
 }
 
-// read2DFloat64Var reads a 2D float64 array from a NetCDF variable.
-func read2DFloat64Var(v netcdf.Var, nRows, nCols int) ([][]float64, error) {
+// transpose2D transposes a 2D array.
+func transpose2D(data [][]float64) [][]float64 {
+	if len(data) == 0 {
+		return data
+	}
+
+	nRows := len(data)
+	nCols := len(data[0])
+
+	transposed := make([][]float64, nCols)
+	for i := 0; i < nCols; i++ {
+		transposed[i] = make([]float64, nRows)
+		for j := 0; j < nRows; j++ {
+			transposed[i][j] = data[j][i]
+		}
+	}
+
+	return transposed
+}
+
+// Close releases resources.
+func (s *Store) Close() error {
+	return nil
+}
+
+// read2DFloat64VarSubset reads a subset of a 2D float64 array from a NetCDF variable.
+// Reads data starting at [startRow, startCol] with dimensions [nRows, nCols].
+// Supports the same data types as read2DFloat64Var.
+func read2DFloat64VarSubset(v netcdf.Var, startRow, startCol, nRows, nCols int) ([][]float64, error) {
+	// Get variable type.
 	varType, err := v.Type()
 	if err != nil {
 		return nil, fmt.Errorf("failed to get variable type: %w", err)
@@ -201,40 +259,46 @@ func read2DFloat64Var(v netcdf.Var, nRows, nCols int) ([][]float64, error) {
 	var flatData []float64
 	totalSize := nRows * nCols
 
+	// Prepare start and count arrays for hyperslab reading.
+	start := []uint64{uint64(startRow), uint64(startCol)}
+	count := []uint64{uint64(nRows), uint64(nCols)}
+
 	// Read data based on type.
 	switch varType {
 	case netcdf.DOUBLE:
 		flatData = make([]float64, totalSize)
-		err = v.ReadFloat64s(flatData)
+		err = v.ReadFloat64Slice(flatData, start, count)
 		if err != nil {
-			return nil, fmt.Errorf("failed to read float64: %w", err)
+			return nil, fmt.Errorf("failed to read float64 subset: %w", err)
 		}
 	case netcdf.FLOAT:
 		// Read as float32 and convert to float64.
 		float32Data := make([]float32, totalSize)
-		err = v.ReadFloat32s(float32Data)
+		err = v.ReadFloat32Slice(float32Data, start, count)
 		if err != nil {
-			return nil, fmt.Errorf("failed to read float32: %w", err)
+			return nil, fmt.Errorf("failed to read float32 subset: %w", err)
 		}
 		flatData = make([]float64, totalSize)
 		for i, val := range float32Data {
 			flatData[i] = float64(val)
 		}
 	case netcdf.SHORT:
+		// Read as int16 and convert to float64.
 		int16Data := make([]int16, totalSize)
-		err = v.ReadInt16s(int16Data)
+		err = v.ReadInt16Slice(int16Data, start, count)
 		if err != nil {
-			return nil, fmt.Errorf("failed to read int16: %w", err)
+			return nil, fmt.Errorf("failed to read int16 subset: %w", err)
 		}
 		flatData = make([]float64, totalSize)
 		for i, val := range int16Data {
 			flatData[i] = float64(val)
 		}
 	case netcdf.INT:
+		// Read as int32 and convert to float64.
 		int32Data := make([]int32, totalSize)
-		err = v.ReadInt32s(int32Data)
+		err = v.ReadInt32Slice(int32Data, start, count)
 		if err != nil {
-			return nil, fmt.Errorf("failed to read int32: %w", err)
+			return nil, fmt.Errorf("failed to read int32 subset: %w", err)
 		}
 		flatData = make([]float64, totalSize)
 		for i, val := range int32Data {
@@ -276,27 +340,39 @@ func read2DFloat64Var(v netcdf.Var, nRows, nCols int) ([][]float64, error) {
 	return values, nil
 }
 
-// transpose2D transposes a 2D array.
-func transpose2D(data [][]float64) [][]float64 {
-	if len(data) == 0 {
-		return data
+// findNearestIndex finds the index of the value closest to target in a sorted array.
+func findNearestIndex(arr []float64, target float64) int {
+	if len(arr) == 0 {
+		return 0
 	}
 
-	nRows := len(data)
-	nCols := len(data[0])
+	// Binary search for efficiency with large arrays.
+	left, right := 0, len(arr)-1
 
-	transposed := make([][]float64, nCols)
-	for i := 0; i < nCols; i++ {
-		transposed[i] = make([]float64, nRows)
-		for j := 0; j < nRows; j++ {
-			transposed[i][j] = data[j][i]
+	for left < right {
+		mid := (left + right) / 2
+		if arr[mid] < target {
+			left = mid + 1
+		} else {
+			right = mid
 		}
 	}
 
-	return transposed
+	// Check if left-1 is closer.
+	if left > 0 && math.Abs(arr[left-1]-target) < math.Abs(arr[left]-target) {
+		return left - 1
+	}
+
+	return left
 }
 
-// Close releases resources.
-func (s *Store) Close() error {
-	return nil
+// clamp ensures value is within [min, max] range.
+func clamp(value, min, max int) int {
+	if value < min {
+		return min
+	}
+	if value > max {
+		return max
+	}
+	return value
 }
