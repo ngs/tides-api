@@ -38,6 +38,11 @@ data/fes/**/*.nc
 data/fes/**/*.tar.gz
 data/fes/**/*.zip
 data/fes/.credentials
+data/bathymetry/*.nc
+data/bathymetry/**/*.nc
+data/bathymetry/**/*.tar.gz
+data/bathymetry/**/*.zip
+data/bathymetry/.credentials
 .fes_credentials
 
 # FES download temporary files

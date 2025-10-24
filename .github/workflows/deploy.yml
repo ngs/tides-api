@@ -16,6 +16,8 @@ env:
   SERVICE_NAME: tides-api
   FES_DIR: /app/data/fes
   GCS_FES_BUCKET: tides-app-fes
+  BATHY_DIR: /app/data/bathymetry
+  GCS_BATHY_BUCKET: tides-app-bathymetry
 
 jobs:
   deploy:
@@ -57,14 +59,16 @@ jobs:
             --allow-unauthenticated \
             --min-instances 0 \
             --max-instances 10 \
-            --memory 1Gi \
-            --cpu 1 \
+            --memory 2Gi \
+            --cpu 2 \
             --timeout 60s \
             --concurrency 80 \
             --execution-environment gen2 \
             --add-volume name=fes-data,type=cloud-storage,bucket=${{ env.GCS_FES_BUCKET }},readonly=true \
             --add-volume-mount volume=fes-data,mount-path=${{ env.FES_DIR }} \
-            --set-env-vars "DATA_DIR=/app/data,FES_DIR=${{ env.FES_DIR }},TZ=Asia/Tokyo,CORS_ALLOWED_ORIGINS=https://tides.ngs.io" \
+            --add-volume name=bathy-data,type=cloud-storage,bucket=${{ env.GCS_BATHY_BUCKET }},readonly=true \
+            --add-volume-mount volume=bathy-data,mount-path=${{ env.BATHY_DIR }} \
+            --set-env-vars "DATA_DIR=/app/data,FES_DIR=${{ env.FES_DIR }},BATHYMETRY_GEBCO_PATH=${{ env.BATHY_DIR }}/GEBCO_2025.nc,BATHYMETRY_MSS_PATH=${{ env.BATHY_DIR }}/DTU21MSS_1min_WGS84.nc,TZ=Asia/Tokyo,CORS_ALLOWED_ORIGINS=https://tides.ngs.io" \
             --project=${{ env.PROJECT_ID }}
 
       - name: Wait for service to be ready
@@ -132,6 +136,16 @@ jobs:
           echo "Testing FES predictions endpoint..."
           curl -s "$SERVICE_URL/v1/tides/predictions?lat=35.6762&lon=139.6503&start=2025-10-21T00:00:00Z&end=2025-10-21T03:00:00Z&interval=30m" | jq '.source, .predictions | length'
 
+      - name: Test bathymetry endpoint
+        run: |
+          SERVICE_URL=$(gcloud run services describe ${{ env.SERVICE_NAME }} \
+            --region ${{ env.REGION }} \
+            --project=${{ env.PROJECT_ID }} \
+            --format 'value(status.url)')
+
+          echo "Testing bathymetry endpoint..."
+          curl -s "$SERVICE_URL/v1/bathymetry?lat=35.6762&lon=139.6503" | jq '.depth, .source'
+
       - name: Deployment summary
         run: |
           SERVICE_URL=$(gcloud run services describe ${{ env.SERVICE_NAME }} \
@@ -152,8 +166,10 @@ jobs:
           echo "  Health: $SERVICE_URL/health"
           echo "  Constituents: $SERVICE_URL/v1/constituents"
           echo "  Predictions: $SERVICE_URL/v1/tides/predictions"
+          echo "  Bathymetry: $SERVICE_URL/v1/bathymetry"
           echo ""
           echo "Example queries:"
           echo "  Station (CSV): $SERVICE_URL/v1/tides/predictions?station_id=tokyo&start=2025-10-21T00:00:00Z&end=2025-10-21T12:00:00Z&interval=10m"
           echo "  Lat/Lon (FES): $SERVICE_URL/v1/tides/predictions?lat=35.6762&lon=139.6503&start=2025-10-21T00:00:00Z&end=2025-10-21T12:00:00Z&interval=10m"
+          echo "  Bathymetry: $SERVICE_URL/v1/bathymetry?lat=35.6762&lon=139.6503"
           echo "=================================================="

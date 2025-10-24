@@ -10,7 +10,8 @@ BINARY_PATH=./$(BINARY_NAME)
 # GCP parameters
 PROJECT_ID ?= $(shell gcloud config get-value project 2>/dev/null)
 REGION ?= asia-northeast1
-GCS_FES_BUCKET ?= $(PROJECT_ID)-tides-fes-data
+GCS_FES_BUCKET ?= tides-app-fes
+GCS_BATHY_BUCKET ?= tides-app-bathymetry
 
 # Go parameters
 GOCMD=go
@@ -305,7 +306,176 @@ gcs-delete-bucket: ## Delete GCS bucket (WARNING: destroys all FES data in cloud
 		echo "Cancelled."; \
 	fi
 
+# Bathymetry data management
+BATHY_DIR := ./data/bathymetry
+GEBCO_URL := https://dap.ceda.ac.uk/bodc/gebco/global/gebco_2025/ice_surface_elevation/netcdf/gebco_2025.zip?download=1
+GEBCO_FILE := GEBCO_2025.nc
+DTU_MSS_URL := https://data.dtu.dk/ndownloader/files/53106539
+DTU_MSS_FILE := DTU21MSS_1min_WGS84.nc
+USER_AGENT := Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/141.0.0.0 Safari/537.36
+
+bathy-setup: ## Create bathymetry data directory
+	@echo "Creating bathymetry data directory..."
+	@mkdir -p $(BATHY_DIR)
+	@echo "Directory created: $(BATHY_DIR)/"
+
+bathy-download-gebco: ## Download GEBCO 2025 bathymetry data (~4GB compressed, 7.5GB uncompressed)
+	@echo "Downloading GEBCO 2025 bathymetry data..."
+	@echo "WARNING: This is a 4GB compressed file (7.5GB uncompressed) and will take significant time."
+	@echo "Source: General Bathymetric Chart of the Oceans (GEBCO)"
+	@echo "License: Public Domain"
+	@echo ""
+	@mkdir -p $(BATHY_DIR)
+	@if [ -f "$(BATHY_DIR)/$(GEBCO_FILE)" ]; then \
+		echo "✓ GEBCO file already exists: $(BATHY_DIR)/$(GEBCO_FILE)"; \
+		echo "Skipping download."; \
+		ls -lh $(BATHY_DIR)/$(GEBCO_FILE); \
+	else \
+		echo "Downloading GEBCO_2025 Grid (NetCDF format)..."; \
+		if [ -f "$(BATHY_DIR)/gebco_2025.zip" ]; then \
+			echo "Found existing gebco_2025.zip, checking integrity..."; \
+			if unzip -t $(BATHY_DIR)/gebco_2025.zip > /dev/null 2>&1; then \
+				echo "✓ Existing zip file is complete, extracting..."; \
+			else \
+				echo "⚠ Existing zip file is incomplete, resuming download..."; \
+				cd $(BATHY_DIR) && curl -C - -L -o gebco_2025.zip "$(GEBCO_URL)"; \
+			fi; \
+		else \
+			echo "Downloading gebco_2025.zip (4GB)..."; \
+			cd $(BATHY_DIR) && curl -L -o gebco_2025.zip "$(GEBCO_URL)"; \
+		fi; \
+		echo "Extracting NetCDF file..."; \
+		cd $(BATHY_DIR) && \
+		unzip -j gebco_2025.zip "GEBCO_2025.nc" -d . && \
+		mv GEBCO_2025.nc $(GEBCO_FILE) && \
+		rm gebco_2025.zip && \
+		echo "" && \
+		echo "Download complete: $(BATHY_DIR)/$(GEBCO_FILE)" && \
+		ls -lh $(GEBCO_FILE); \
+	fi
+
+bathy-download-dtu-mss: ## Download DTU21 Mean Sea Surface data (~500MB)
+	@echo "Downloading DTU21 Mean Sea Surface data..."
+	@echo "Size: ~500MB"
+	@echo "Source: DTU Space (Technical University of Denmark)"
+	@echo "License: Free for scientific and commercial use"
+	@echo ""
+	@mkdir -p $(BATHY_DIR)
+	@if [ -f "$(BATHY_DIR)/$(DTU_MSS_FILE)" ]; then \
+		echo "✓ DTU MSS file already exists: $(BATHY_DIR)/$(DTU_MSS_FILE)"; \
+		echo "Skipping download."; \
+		ls -lh $(BATHY_DIR)/$(DTU_MSS_FILE); \
+	else \
+		echo "Downloading $(DTU_MSS_FILE)..."; \
+		echo "Note: Using browser User-Agent to access DTU data repository"; \
+		cd $(BATHY_DIR) && \
+		curl -C - -o $(DTU_MSS_FILE) -L -A "$(USER_AGENT)" "$(DTU_MSS_URL)"; \
+		echo ""; \
+		echo "Download complete: $(BATHY_DIR)/$(DTU_MSS_FILE)"; \
+		ls -lh $(DTU_MSS_FILE); \
+	fi
+
+bathy-download-all: bathy-setup bathy-download-dtu-mss bathy-download-gebco ## Download all bathymetry data
+
+bathy-check: ## Check downloaded bathymetry files
+	@echo "Checking bathymetry data files in $(BATHY_DIR)..."
+	@if [ ! -d "$(BATHY_DIR)" ]; then \
+		echo "Bathymetry directory not found: $(BATHY_DIR)"; \
+		echo "Run 'make bathy-setup' first."; \
+		exit 1; \
+	fi
+	@echo ""
+	@echo "NetCDF files found:"
+	@find $(BATHY_DIR) -name "*.nc" -type f | while read file; do \
+		echo "  - $$(basename $$file) ($$(du -h $$file | cut -f1))"; \
+	done || echo "  No .nc files found"
+	@echo ""
+	@if [ -f "$(BATHY_DIR)/$(GEBCO_FILE)" ]; then \
+		echo "✓ GEBCO bathymetry data found"; \
+	else \
+		echo "✗ GEBCO bathymetry data not found"; \
+		echo "  Download from: https://www.gebco.net/"; \
+	fi
+	@if [ -f "$(BATHY_DIR)/$(DTU_MSS_FILE)" ]; then \
+		echo "✓ DTU MSS data found"; \
+	else \
+		echo "✗ DTU MSS data not found"; \
+		echo "  Run 'make bathy-download-dtu-mss'"; \
+	fi
+
+bathy-clean: ## Remove downloaded bathymetry files
+	@echo "WARNING: This will delete all bathymetry files in $(BATHY_DIR)/"
+	@read -p "Are you sure? [y/N] " confirm; \
+	if [ "$$confirm" = "y" ] || [ "$$confirm" = "Y" ]; then \
+		rm -rf $(BATHY_DIR)/*.nc; \
+		echo "Bathymetry files removed."; \
+	else \
+		echo "Cancelled."; \
+	fi
+
+# GCS Bathymetry data targets
+gcs-create-bathy-bucket: ## Create GCS bucket for bathymetry data
+	@echo "Creating Cloud Storage bucket for bathymetry data..."
+	@if [ -z "$(PROJECT_ID)" ]; then \
+		echo "Error: PROJECT_ID not set. Run 'gcloud config set project YOUR_PROJECT_ID'"; \
+		exit 1; \
+	fi
+	@gsutil ls -b gs://$(GCS_BATHY_BUCKET) 2>/dev/null || \
+	(gsutil mb -l $(REGION) -b on gs://$(GCS_BATHY_BUCKET) && \
+	 echo "Bucket created: gs://$(GCS_BATHY_BUCKET)")
+	@echo "Storage cost estimate: ~¥150/month for 7GB in $(REGION)"
+
+gcs-upload-bathy: ## Upload bathymetry data to Cloud Storage
+	@echo "Uploading bathymetry data to Cloud Storage..."
+	@if [ ! -d "$(BATHY_DIR)" ]; then \
+		echo "Error: Bathymetry directory not found: $(BATHY_DIR)"; \
+		echo "Run 'make bathy-download-all' first."; \
+		exit 1; \
+	fi
+	@echo "Checking bucket exists..."
+	@gsutil ls -b gs://$(GCS_BATHY_BUCKET) >/dev/null 2>&1 || \
+	(echo "Error: Bucket gs://$(GCS_BATHY_BUCKET) not found. Run 'make gcs-create-bathy-bucket' first." && exit 1)
+	@echo "Starting upload (this may take 10-20 minutes for large files)..."
+	@gsutil -m rsync -r -d $(BATHY_DIR) gs://$(GCS_BATHY_BUCKET)/
+	@echo ""
+	@echo "Upload complete!"
+	@echo "Bucket: gs://$(GCS_BATHY_BUCKET)"
+	@echo "Files uploaded:"
+	@gsutil du -sh gs://$(GCS_BATHY_BUCKET)
+	@echo ""
+	@echo "Monthly cost estimate: ~¥150 (Standard Storage in $(REGION))"
+	@echo ""
+	@echo "To use with Cloud Run, mount as volume:"
+	@echo "  --add-volume name=bathymetry,type=cloud-storage,bucket=$(GCS_BATHY_BUCKET),readonly=true"
+	@echo "  --add-volume-mount volume=bathymetry,mount-path=/mnt/bathymetry"
+	@echo "  --set-env-vars BATHYMETRY_GEBCO_PATH=/mnt/bathymetry/$(GEBCO_FILE)"
+	@echo "  --set-env-vars BATHYMETRY_MSS_PATH=/mnt/bathymetry/$(DTU_MSS_FILE)"
+
+gcs-download-bathy: ## Download bathymetry data from Cloud Storage
+	@echo "Downloading bathymetry data from Cloud Storage..."
+	@mkdir -p $(BATHY_DIR)
+	@gsutil -m rsync -r gs://$(GCS_BATHY_BUCKET)/ $(BATHY_DIR)/
+	@echo "Download complete: $(BATHY_DIR)/"
+
+gcs-list-bathy: ## List bathymetry files in Cloud Storage
+	@echo "Listing bathymetry files in gs://$(GCS_BATHY_BUCKET)..."
+	@gsutil ls -lh gs://$(GCS_BATHY_BUCKET)/
+
+gcs-check-bathy: ## Check bathymetry data in Cloud Storage
+	@echo "Checking bathymetry data in Cloud Storage..."
+	@echo "Bucket: gs://$(GCS_BATHY_BUCKET)"
+	@echo "Region: $(REGION)"
+	@echo ""
+	@gsutil du -sh gs://$(GCS_BATHY_BUCKET)
+	@echo ""
+	@echo "Files:"
+	@gsutil ls gs://$(GCS_BATHY_BUCKET)/*.nc 2>/dev/null | wc -l | xargs -I {} echo "  NetCDF files: {}"
+	@echo ""
+	@echo "Monthly cost estimate: ~¥150 (Standard Storage)"
+
 .PHONY: install all curl-health curl-constituents curl-tokyo curl-tokyo-extrema
 .PHONY: fes-setup fes-list fes-download-ocean-tide fes-download-major fes-download-all
 .PHONY: fes-check fes-clean fes-mock fes-mock-fast fes-mock-custom
 .PHONY: gcs-check-project gcs-create-bucket gcs-upload-fes gcs-download-fes gcs-list-fes gcs-check-fes gcs-delete-bucket
+.PHONY: bathy-setup bathy-download-gebco bathy-download-dtu-mss bathy-download-all bathy-check bathy-clean
+.PHONY: gcs-create-bathy-bucket gcs-upload-bathy gcs-download-bathy gcs-list-bathy gcs-check-bathy

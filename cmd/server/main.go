@@ -7,6 +7,7 @@ import (
 	"os"
 
 	"go.ngs.io/tides-api/internal/adapter/store"
+	"go.ngs.io/tides-api/internal/adapter/store/bathymetry"
 	"go.ngs.io/tides-api/internal/adapter/store/csv"
 	"go.ngs.io/tides-api/internal/adapter/store/fes"
 	httpHandler "go.ngs.io/tides-api/internal/http"
@@ -35,6 +36,8 @@ func main() {
 	port := getEnv("PORT", "8080")
 	dataDir := getEnv("DATA_DIR", "./data")
 	fesDir := getEnv("FES_DIR", "./data/fes")
+	gebcoPath := getEnv("BATHYMETRY_GEBCO_PATH", "")
+	mssPath := getEnv("BATHYMETRY_MSS_PATH", "")
 
 	log.Printf("Starting Tide API server...")
 	log.Printf("Port: %s", port)
@@ -49,8 +52,25 @@ func main() {
 	var csvLoader store.ConstituentLoader = csvStore
 	var fesLoader store.ConstituentLoader = fesStore
 
+	// Initialize bathymetry store (optional).
+	// Paths can be local files or GCS FUSE-mounted paths (e.g., /mnt/bathymetry/gebco.nc).
+	var bathyStore bathymetry.Store
+	if gebcoPath != "" || mssPath != "" {
+		log.Printf("Initializing bathymetry store")
+		if gebcoPath != "" {
+			log.Printf("  GEBCO path: %s", gebcoPath)
+		}
+		if mssPath != "" {
+			log.Printf("  MSS path: %s", mssPath)
+		}
+		bathyStore = bathymetry.NewLocalStore(gebcoPath, mssPath)
+		log.Printf("Bathymetry store initialized")
+	} else {
+		log.Printf("Bathymetry store disabled (no data paths configured)")
+	}
+
 	// Initialize use case.
-	predictionUC := usecase.NewPredictionUseCase(csvLoader, fesLoader)
+	predictionUC := usecase.NewPredictionUseCase(csvLoader, fesLoader, bathyStore)
 
 	// Setup router.
 	router := httpHandler.SetupRouter(predictionUC)
@@ -62,6 +82,9 @@ func main() {
 	log.Printf("API endpoints:")
 	log.Printf("  - GET /v1/tides/predictions")
 	log.Printf("  - GET /v1/constituents")
+	if bathyStore != nil {
+		log.Printf("  - GET /v1/bathymetry")
+	}
 
 	if err := router.Run(addr); err != nil {
 		log.Fatalf("Failed to start server: %v", err)
@@ -87,10 +110,12 @@ func printUsage() {
 	fmt.Println("  -version       Show version information")
 	fmt.Println()
 	fmt.Println("ENVIRONMENT VARIABLES:")
-	fmt.Println("  PORT                  Server port (default: 8080)")
-	fmt.Println("  DATA_DIR              CSV data directory (default: ./data)")
-	fmt.Println("  FES_DIR               FES NetCDF data directory (default: ./data/fes)")
-	fmt.Println("  CORS_ALLOWED_ORIGINS  Comma-separated list of allowed origins (default: all origins)")
+	fmt.Println("  PORT                    Server port (default: 8080)")
+	fmt.Println("  DATA_DIR                CSV data directory (default: ./data)")
+	fmt.Println("  FES_DIR                 FES NetCDF data directory (default: ./data/fes)")
+	fmt.Println("  CORS_ALLOWED_ORIGINS    Comma-separated list of allowed origins (default: all origins)")
+	fmt.Println("  BATHYMETRY_GEBCO_PATH   Path to GEBCO NetCDF file (optional, can be GCS FUSE mount)")
+	fmt.Println("  BATHYMETRY_MSS_PATH     Path to MSS NetCDF file (optional, can be GCS FUSE mount)")
 	fmt.Println()
 	fmt.Println("EXAMPLES:")
 	fmt.Println("  # Start server with default settings")
@@ -103,5 +128,6 @@ func printUsage() {
 	fmt.Println("  GET /health                    Health check")
 	fmt.Println("  GET /v1/constituents           List tidal constituents")
 	fmt.Println("  GET /v1/tides/predictions      Get tide predictions")
+	fmt.Println("  GET /v1/bathymetry             Get bathymetry and MSL data (if configured)")
 	fmt.Println()
 }

@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"go.ngs.io/tides-api/internal/adapter/store"
+	"go.ngs.io/tides-api/internal/adapter/store/bathymetry"
 	"go.ngs.io/tides-api/internal/domain"
 )
 
@@ -42,13 +43,16 @@ type PredictionResponse struct {
 	Constituents []string          `json:"constituents"`
 	Predictions  []PredictionPoint `json:"predictions"`
 	Extrema      ExtremaResponse   `json:"extrema"`
+	MSL          *float64          `json:"msl_m,omitempty"`          // Mean Sea Level in meters.
+	SeabedDepth  *float64          `json:"seabed_depth_m,omitempty"` // Seabed depth in meters (positive value).
 	Meta         map[string]string `json:"meta"`
 }
 
 // PredictionPoint represents a single tide height prediction.
 type PredictionPoint struct {
-	Time    string  `json:"time"`
-	HeightM float64 `json:"height_m"`
+	Time    string   `json:"time"`
+	HeightM float64  `json:"height_m"`          // Tide height relative to datum.
+	DepthM  *float64 `json:"depth_m,omitempty"` // Water depth at this time (seabed_depth + msl + height).
 }
 
 // ExtremaResponse contains high and low tides.
@@ -59,15 +63,17 @@ type ExtremaResponse struct {
 
 // PredictionUseCase orchestrates tide prediction.
 type PredictionUseCase struct {
-	csvStore *store.ConstituentLoader
-	fesStore *store.ConstituentLoader
+	csvStore        *store.ConstituentLoader
+	fesStore        *store.ConstituentLoader
+	bathymetryStore bathymetry.Store // Optional bathymetry/MSL data store.
 }
 
 // NewPredictionUseCase creates a new prediction use case.
-func NewPredictionUseCase(csvStore, fesStore store.ConstituentLoader) *PredictionUseCase {
+func NewPredictionUseCase(csvStore, fesStore store.ConstituentLoader, bathyStore bathymetry.Store) *PredictionUseCase {
 	return &PredictionUseCase{
-		csvStore: &csvStore,
-		fesStore: &fesStore,
+		csvStore:        &csvStore,
+		fesStore:        &fesStore,
+		bathymetryStore: bathyStore,
 	}
 }
 
@@ -157,10 +163,27 @@ func (uc *PredictionUseCase) Execute(req PredictionRequest) (*PredictionResponse
 		}
 	}
 
+	// Load bathymetry metadata if available (lat/lon queries only).
+	var metadata *domain.LocationMetadata
+	if req.Lat != nil && req.Lon != nil && uc.bathymetryStore != nil {
+		var err error
+		metadata, err = uc.bathymetryStore.GetMetadata(*req.Lat, *req.Lon)
+		if err != nil {
+			// Metadata is optional - log warning but continue.
+			// In production, use proper logging.
+			fmt.Printf("Warning: failed to load bathymetry metadata: %v\n", err)
+		}
+	}
+
 	// Set up prediction parameters.
+	msl := 0.0
+	if metadata != nil {
+		msl = metadata.MSL
+	}
+
 	params := domain.PredictionParams{
 		Constituents:    constituents,
-		MSL:             0.0, // MVP: assume MSL = 0.
+		MSL:             msl,
 		NodalCorrection: &domain.IdentityNodalCorrection{},
 		ReferenceTime:   time.Unix(0, 0).UTC(), // Use Unix epoch as reference.
 	}
@@ -177,26 +200,54 @@ func (uc *PredictionUseCase) Execute(req PredictionRequest) (*PredictionResponse
 	// Convert to response format.
 	predictionPoints := make([]PredictionPoint, len(predictions))
 	for i, p := range predictions {
-		predictionPoints[i] = PredictionPoint{
+		point := PredictionPoint{
 			Time:    p.Time.UTC().Format(time.RFC3339),
-			HeightM: roundToDecimal(p.HeightM, 3),
+			HeightM: roundToDecimal(p.HeightM),
 		}
+
+		// Calculate water depth if seabed depth is available.
+		// Water depth = seabed_depth + msl + tide_height.
+		if metadata != nil && metadata.DepthM != nil {
+			waterDepth := *metadata.DepthM + msl + p.HeightM
+			roundedDepth := roundToDecimal(waterDepth)
+			point.DepthM = &roundedDepth
+		}
+
+		predictionPoints[i] = point
 	}
 
 	highPoints := make([]PredictionPoint, len(extrema.Highs))
 	for i, h := range extrema.Highs {
-		highPoints[i] = PredictionPoint{
+		point := PredictionPoint{
 			Time:    h.Time.UTC().Format(time.RFC3339),
-			HeightM: roundToDecimal(h.HeightM, 3),
+			HeightM: roundToDecimal(h.HeightM),
 		}
+
+		// Calculate water depth if seabed depth is available.
+		if metadata != nil && metadata.DepthM != nil {
+			waterDepth := *metadata.DepthM + msl + h.HeightM
+			roundedDepth := roundToDecimal(waterDepth)
+			point.DepthM = &roundedDepth
+		}
+
+		highPoints[i] = point
 	}
 
 	lowPoints := make([]PredictionPoint, len(extrema.Lows))
 	for i, l := range extrema.Lows {
-		lowPoints[i] = PredictionPoint{
+		point := PredictionPoint{
 			Time:    l.Time.UTC().Format(time.RFC3339),
-			HeightM: roundToDecimal(l.HeightM, 3),
+			HeightM: roundToDecimal(l.HeightM),
 		}
+
+		// Calculate water depth if seabed depth is available.
+		if metadata != nil && metadata.DepthM != nil {
+			waterDepth := *metadata.DepthM + msl + l.HeightM
+			roundedDepth := roundToDecimal(waterDepth)
+			point.DepthM = &roundedDepth
+		}
+
+		lowPoints[i] = point
 	}
 
 	// Extract constituent names.
@@ -227,6 +278,22 @@ func (uc *PredictionUseCase) Execute(req PredictionRequest) (*PredictionResponse
 		},
 	}
 
+	// Add metadata if available.
+	if metadata != nil {
+		if metadata.MSL != 0.0 {
+			response.MSL = &metadata.MSL
+		}
+		if metadata.DepthM != nil {
+			response.SeabedDepth = metadata.DepthM
+		}
+		if metadata.DatumName != "" {
+			response.Meta["datum_name"] = metadata.DatumName
+		}
+		if metadata.SourceName != "" {
+			response.Meta["metadata_source"] = metadata.SourceName
+		}
+	}
+
 	// Add attribution based on source.
 	if source == sourceCSV {
 		response.Meta["attribution"] = "Mock CSV (for dev). Replace with FES later."
@@ -242,11 +309,26 @@ func (uc *PredictionUseCase) GetAllConstituents() []domain.Constituent {
 	return domain.GetAllConstituents()
 }
 
-// Helper function to round to decimal places.
-func roundToDecimal(val float64, precision int) float64 {
-	multiplier := 1.0
-	for i := 0; i < precision; i++ {
-		multiplier *= 10
+// GetBathymetry returns bathymetry and MSL data for a location.
+func (uc *PredictionUseCase) GetBathymetry(lat, lon float64) (*domain.LocationMetadata, error) {
+	if uc.bathymetryStore == nil {
+		return nil, fmt.Errorf("bathymetry data not available")
 	}
+
+	metadata, err := uc.bathymetryStore.GetMetadata(lat, lon)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get bathymetry data: %w", err)
+	}
+
+	if metadata == nil {
+		return nil, fmt.Errorf("no bathymetry data available for location (%.4f, %.4f)", lat, lon)
+	}
+
+	return metadata, nil
+}
+
+// Helper function to round to 3 decimal places.
+func roundToDecimal(val float64) float64 {
+	multiplier := 1000.0
 	return float64(int(val*multiplier+0.5)) / multiplier
 }

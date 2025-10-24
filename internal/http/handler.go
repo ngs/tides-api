@@ -188,3 +188,61 @@ func (h *Handler) GetConstituentsList(c *gin.Context) {
 		"count":        len(response),
 	})
 }
+
+// GetBathymetry handles GET /v1/bathymetry.
+func (h *Handler) GetBathymetry(c *gin.Context) {
+	// Parse query parameters.
+	latStr := c.Query("lat")
+	lonStr := c.Query("lon")
+
+	if latStr == "" || lonStr == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "lat and lon parameters are required"})
+		return
+	}
+
+	lat, err := strconv.ParseFloat(latStr, 64)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": fmt.Sprintf("invalid latitude: %v", err)})
+		return
+	}
+
+	lon, err := strconv.ParseFloat(lonStr, 64)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": fmt.Sprintf("invalid longitude: %v", err)})
+		return
+	}
+
+	// Validate ranges.
+	if lat < -90 || lat > 90 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "latitude must be between -90 and 90"})
+		return
+	}
+	if lon < -180 || lon > 180 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "longitude must be between -180 and 180"})
+		return
+	}
+
+	// Get bathymetry data.
+	metadata, err := h.predictionUC.GetBathymetry(lat, lon)
+	if err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": err.Error()})
+		return
+	}
+
+	// Build response.
+	response := gin.H{
+		"location": gin.H{
+			"lat": lat,
+			"lon": lon,
+		},
+		"msl_m":      metadata.MSL,
+		"datum_name": metadata.DatumName,
+		"source":     metadata.SourceName,
+	}
+
+	if metadata.DepthM != nil {
+		response["depth_m"] = *metadata.DepthM
+	}
+
+	c.JSON(http.StatusOK, response)
+}

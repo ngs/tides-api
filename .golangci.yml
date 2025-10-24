@@ -181,6 +181,15 @@ issues:
         - gocritic
         - revive
 
+    # Bathymetry adapter - NetCDF loading has necessary complexity
+    - path: internal/adapter/store/bathymetry/
+      linters:
+        - gochecknoglobals
+        - gocyclo
+        - nestif
+        - gocritic
+        - revive
+
     # HTTP handlers - gin.Context methods don't always need error checks
     - path: internal/http/
       text: "Error return value of.*gin.*is not checked"
@@ -234,9 +243,12 @@ issues:
   # Fix found issues (if supported by linter)
   fix: false
 
+  # Uniq by line
+  uniq-by-line: true
+
 output:
-  format: colored-line-number
+  formats:
+    - format: colored-line-number
   print-issued-lines: true
   print-linter-name: true
-  uniq-by-line: true
   sort-results: true
