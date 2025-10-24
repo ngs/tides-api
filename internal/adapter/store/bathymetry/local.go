@@ -2,6 +2,7 @@ package bathymetry
 
 import (
 	"fmt"
+	"math"
 	"os"
 	"sync"
 
@@ -42,7 +43,7 @@ func (s *LocalStore) GetMetadata(lat, lon float64) (*domain.LocationMetadata, er
 
 	// Load MSL grid if not cached.
 	if s.mslGrid == nil && s.mssPath != "" {
-		if err := s.loadMSSGrid(); err != nil {
+		if err := s.loadMSSGrid(lat, lon); err != nil {
 			// MSL is optional - log warning but continue.
 			fmt.Fprintf(os.Stderr, "Warning: failed to load MSS grid: %v\n", err)
 		}
@@ -50,7 +51,7 @@ func (s *LocalStore) GetMetadata(lat, lon float64) (*domain.LocationMetadata, er
 
 	// Load depth grid if not cached.
 	if s.depthGrid == nil && s.gebcoPath != "" {
-		if err := s.loadDepthGrid(); err != nil {
+		if err := s.loadDepthGrid(lat, lon); err != nil {
 			// Depth is optional - log warning but continue.
 			fmt.Fprintf(os.Stderr, "Warning: failed to load depth grid: %v\n", err)
 		}
@@ -117,11 +118,12 @@ func (s *LocalStore) GetMetadata(lat, lon float64) (*domain.LocationMetadata, er
 	return metadata, nil
 }
 
-// loadMSSGrid loads the MSS NetCDF file.
-func (s *LocalStore) loadMSSGrid() error {
-	// Load NetCDF grid.
+// loadMSSGrid loads a subset of the MSS NetCDF file around the target location.
+func (s *LocalStore) loadMSSGrid(lat, lon float64) error {
+	// Load NetCDF grid subset with ±2 degree margin.
 	// DTU21 uses "mean_sea_surf_sol2" variable name.
-	grid, err := loadNetCDFGrid(s.mssPath, "lat", "lon", "mean_sea_surf_sol2")
+	const margin = 2.0 // Degrees.
+	grid, err := loadNetCDFGridSubset(s.mssPath, "lat", "lon", "mean_sea_surf_sol2", lat, lon, margin)
 	if err != nil {
 		return fmt.Errorf("failed to load MSS grid: %w", err)
 	}
@@ -130,11 +132,12 @@ func (s *LocalStore) loadMSSGrid() error {
 	return nil
 }
 
-// loadDepthGrid loads the GEBCO NetCDF file.
-func (s *LocalStore) loadDepthGrid() error {
-	// Load NetCDF grid.
+// loadDepthGrid loads a subset of the GEBCO NetCDF file around the target location.
+func (s *LocalStore) loadDepthGrid(lat, lon float64) error {
+	// Load NetCDF grid subset with ±2 degree margin.
 	// GEBCO uses "elevation" variable (negative for depth below sea level).
-	grid, err := loadNetCDFGrid(s.gebcoPath, "lat", "lon", "elevation")
+	const margin = 2.0 // Degrees.
+	grid, err := loadNetCDFGridSubset(s.gebcoPath, "lat", "lon", "elevation", lat, lon, margin)
 	if err != nil {
 		return fmt.Errorf("failed to load GEBCO grid: %w", err)
 	}
@@ -148,9 +151,10 @@ func (s *LocalStore) Close() error {
 	return nil
 }
 
-// LoadNetCDFGrid reads a 2D grid from a NetCDF file.
-// This is similar to the FES loader but with different variable names.
-func loadNetCDFGrid(filepath, latVarName, lonVarName, dataVarName string) (*interp.Grid2D, error) {
+// loadNetCDFGridSubset reads a subset of a 2D grid from a NetCDF file.
+// If margin is 0, the entire grid is loaded.
+// If margin > 0, only data within ±margin degrees of (targetLat, targetLon) is loaded.
+func loadNetCDFGridSubset(filepath, latVarName, lonVarName, dataVarName string, targetLat, targetLon, margin float64) (*interp.Grid2D, error) {
 	// Open NetCDF file.
 	nc, err := netcdf.OpenFile(filepath, netcdf.NOWRITE)
 	if err != nil {
@@ -193,6 +197,42 @@ func loadNetCDFGrid(filepath, latVarName, lonVarName, dataVarName string) (*inte
 	}
 	if !lonFound {
 		return nil, fmt.Errorf("longitude variable not found (tried: %v)", lonNames)
+	}
+
+	// Calculate subset indices if margin is specified.
+	var latStart, latEnd, lonStart, lonEnd int
+	var subsetLat, subsetLon []float64
+
+	if margin > 0 {
+		// Find indices for the subset region.
+		latStartIdx := findNearestIndex(latData, targetLat-margin)
+		latEndIdx := findNearestIndex(latData, targetLat+margin)
+		lonStartIdx := findNearestIndex(lonData, targetLon-margin)
+		lonEndIdx := findNearestIndex(lonData, targetLon+margin)
+
+		// Ensure proper ordering (start <= end).
+		if latStartIdx > latEndIdx {
+			latStartIdx, latEndIdx = latEndIdx, latStartIdx
+		}
+		if lonStartIdx > lonEndIdx {
+			lonStartIdx, lonEndIdx = lonEndIdx, lonStartIdx
+		}
+
+		// Clamp to valid ranges and ensure we have at least 2 points.
+		latStart = clamp(latStartIdx, 0, len(latData)-2)
+		latEnd = clamp(latEndIdx+1, latStart+2, len(latData))
+		lonStart = clamp(lonStartIdx, 0, len(lonData)-2)
+		lonEnd = clamp(lonEndIdx+1, lonStart+2, len(lonData))
+
+		// Extract subset of coordinate arrays.
+		subsetLat = latData[latStart:latEnd]
+		subsetLon = lonData[lonStart:lonEnd]
+	} else {
+		// Load entire grid.
+		latStart, latEnd = 0, len(latData)
+		lonStart, lonEnd = 0, len(lonData)
+		subsetLat = latData
+		subsetLon = lonData
 	}
 
 	// Read data variable.
@@ -250,13 +290,26 @@ func loadNetCDFGrid(filepath, latVarName, lonVarName, dataVarName string) (*inte
 		order = lonLatOrder
 	}
 
+	// Calculate subset dimensions.
+	nSubsetLat := latEnd - latStart
+	nSubsetLon := lonEnd - lonStart
+
 	switch order {
 	case latLonOrder:
 		// Data is [lat, lon].
-		values, err = read2DFloat64Var(dataVar, nLat, nLon)
+		if margin > 0 {
+			values, err = read2DFloat64VarSubset(dataVar, latStart, lonStart, nSubsetLat, nSubsetLon)
+		} else {
+			values, err = read2DFloat64Var(dataVar, nLat, nLon)
+		}
 	case lonLatOrder:
 		// Data is [lon, lat] - need to transpose.
-		transposed, err := read2DFloat64Var(dataVar, nLon, nLat)
+		var transposed [][]float64
+		if margin > 0 {
+			transposed, err = read2DFloat64VarSubset(dataVar, lonStart, latStart, nSubsetLon, nSubsetLat)
+		} else {
+			transposed, err = read2DFloat64Var(dataVar, nLon, nLat)
+		}
 		if err != nil {
 			return nil, err
 		}
@@ -272,8 +325,8 @@ func loadNetCDFGrid(filepath, latVarName, lonVarName, dataVarName string) (*inte
 
 	// Create Grid2D.
 	grid := &interp.Grid2D{
-		X:      lonData,
-		Y:      latData,
+		X:      subsetLon,
+		Y:      subsetLat,
 		Values: values,
 	}
 
@@ -406,6 +459,106 @@ func read2DFloat64Var(v netcdf.Var, nRows, nCols int) ([][]float64, error) {
 	return values, nil
 }
 
+// read2DFloat64VarSubset reads a subset of a 2D float64 array from a NetCDF variable.
+// Reads data starting at [startRow, startCol] with dimensions [nRows, nCols].
+// Supports the same data types as read2DFloat64Var.
+func read2DFloat64VarSubset(v netcdf.Var, startRow, startCol, nRows, nCols int) ([][]float64, error) {
+	// Get variable type.
+	varType, err := v.Type()
+	if err != nil {
+		return nil, fmt.Errorf("failed to get variable type: %w", err)
+	}
+
+	var flatData []float64
+	totalSize := nRows * nCols
+
+	// Prepare start and count arrays for hyperslab reading.
+	start := []uint64{uint64(startRow), uint64(startCol)}
+	count := []uint64{uint64(nRows), uint64(nCols)}
+
+	// Read data based on type.
+	switch varType {
+	case netcdf.DOUBLE:
+		flatData = make([]float64, totalSize)
+		err = v.ReadFloat64Slice(flatData, start, count)
+		if err != nil {
+			return nil, fmt.Errorf("failed to read float64 subset: %w", err)
+		}
+	case netcdf.FLOAT:
+		// Read as float32 and convert to float64.
+		float32Data := make([]float32, totalSize)
+		err = v.ReadFloat32Slice(float32Data, start, count)
+		if err != nil {
+			return nil, fmt.Errorf("failed to read float32 subset: %w", err)
+		}
+		flatData = make([]float64, totalSize)
+		for i, val := range float32Data {
+			flatData[i] = float64(val)
+		}
+	case netcdf.SHORT:
+		// Read as int16 and convert to float64.
+		int16Data := make([]int16, totalSize)
+		err = v.ReadInt16Slice(int16Data, start, count)
+		if err != nil {
+			return nil, fmt.Errorf("failed to read int16 subset: %w", err)
+		}
+		flatData = make([]float64, totalSize)
+		for i, val := range int16Data {
+			flatData[i] = float64(val)
+		}
+	case netcdf.INT:
+		// Read as int32 and convert to float64.
+		int32Data := make([]int32, totalSize)
+		err = v.ReadInt32Slice(int32Data, start, count)
+		if err != nil {
+			return nil, fmt.Errorf("failed to read int32 subset: %w", err)
+		}
+		flatData = make([]float64, totalSize)
+		for i, val := range int32Data {
+			flatData[i] = float64(val)
+		}
+	case netcdf.BYTE, netcdf.UBYTE, netcdf.CHAR, netcdf.USHORT, netcdf.UINT, netcdf.INT64, netcdf.UINT64, netcdf.STRING:
+		return nil, fmt.Errorf("unsupported data type: %v (expected DOUBLE, FLOAT, INT, or SHORT)", varType)
+	}
+
+	// Apply scale_factor if present.
+	scaleAttr := v.Attr("scale_factor")
+	attrLen, err := scaleAttr.Len()
+	if err == nil && attrLen > 0 {
+		// Scale_factor attribute exists.
+		var scaleVal float64
+
+		// Try reading as float64 first.
+		scaleData := make([]float64, 1)
+		err = scaleAttr.ReadFloat64s(scaleData)
+		if err == nil {
+			scaleVal = scaleData[0]
+		} else {
+			// If ReadFloat64s failed, try int32.
+			int32Data := make([]int32, 1)
+			err = scaleAttr.ReadInt32s(int32Data)
+			if err == nil {
+				scaleVal = float64(int32Data[0])
+			}
+		}
+
+		if err == nil && scaleVal != 0 {
+			// Apply scale factor to all values.
+			for i := range flatData {
+				flatData[i] *= scaleVal
+			}
+		}
+	}
+
+	// Convert to 2D array.
+	values := make([][]float64, nRows)
+	for i := 0; i < nRows; i++ {
+		values[i] = flatData[i*nCols : (i+1)*nCols]
+	}
+
+	return values, nil
+}
+
 // transpose2D transposes a 2D array.
 func transpose2D(data [][]float64) [][]float64 {
 	if len(data) == 0 {
@@ -424,4 +577,41 @@ func transpose2D(data [][]float64) [][]float64 {
 	}
 
 	return transposed
+}
+
+// findNearestIndex finds the index of the value closest to target in a sorted array.
+func findNearestIndex(arr []float64, target float64) int {
+	if len(arr) == 0 {
+		return 0
+	}
+
+	// Binary search for efficiency with large arrays.
+	left, right := 0, len(arr)-1
+
+	for left < right {
+		mid := (left + right) / 2
+		if arr[mid] < target {
+			left = mid + 1
+		} else {
+			right = mid
+		}
+	}
+
+	// Check if left-1 is closer.
+	if left > 0 && math.Abs(arr[left-1]-target) < math.Abs(arr[left]-target) {
+		return left - 1
+	}
+
+	return left
+}
+
+// clamp ensures value is within [min, max] range.
+func clamp(value, min, max int) int {
+	if value < min {
+		return min
+	}
+	if value > max {
+		return max
+	}
+	return value
 }
