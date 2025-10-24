@@ -82,6 +82,9 @@ func main() {
 	log.Printf("API endpoints:")
 	log.Printf("  - GET /v1/tides/predictions")
 	log.Printf("  - GET /v1/constituents")
+	if bathyStore != nil {
+		log.Printf("  - GET /v1/bathymetry")
+	}
 
 	if err := router.Run(addr); err != nil {
 		log.Fatalf("Failed to start server: %v", err)
@@ -125,5 +128,6 @@ func printUsage() {
 	fmt.Println("  GET /health                    Health check")
 	fmt.Println("  GET /v1/constituents           List tidal constituents")
 	fmt.Println("  GET /v1/tides/predictions      Get tide predictions")
+	fmt.Println("  GET /v1/bathymetry             Get bathymetry and MSL data (if configured)")
 	fmt.Println()
 }

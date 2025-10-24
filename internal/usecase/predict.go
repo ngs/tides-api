@@ -309,6 +309,24 @@ func (uc *PredictionUseCase) GetAllConstituents() []domain.Constituent {
 	return domain.GetAllConstituents()
 }
 
+// GetBathymetry returns bathymetry and MSL data for a location.
+func (uc *PredictionUseCase) GetBathymetry(lat, lon float64) (*domain.LocationMetadata, error) {
+	if uc.bathymetryStore == nil {
+		return nil, fmt.Errorf("bathymetry data not available")
+	}
+
+	metadata, err := uc.bathymetryStore.GetMetadata(lat, lon)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get bathymetry data: %w", err)
+	}
+
+	if metadata == nil {
+		return nil, fmt.Errorf("no bathymetry data available for location (%.4f, %.4f)", lat, lon)
+	}
+
+	return metadata, nil
+}
+
 // Helper function to round to decimal places.
 func roundToDecimal(val float64, precision int) float64 {
 	multiplier := 1.0

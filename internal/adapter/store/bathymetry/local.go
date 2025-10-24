@@ -88,9 +88,9 @@ func (s *LocalStore) GetMetadata(lat, lon float64) (*domain.LocationMetadata, er
 				metadata.DepthM = &positiveDepth
 			}
 			if metadata.SourceName == "DTU21 MSS" {
-				metadata.SourceName = "GEBCO 2024 + DTU21 MSS"
+				metadata.SourceName = "GEBCO 2025 + DTU21 MSS"
 			} else {
-				metadata.SourceName = "GEBCO 2024"
+				metadata.SourceName = "GEBCO 2025"
 			}
 		}
 	}
@@ -101,7 +101,8 @@ func (s *LocalStore) GetMetadata(lat, lon float64) (*domain.LocationMetadata, er
 // loadMSSGrid loads the MSS NetCDF file.
 func (s *LocalStore) loadMSSGrid() error {
 	// Load NetCDF grid.
-	grid, err := loadNetCDFGrid(s.mssPath, "lat", "lon", "mss")
+	// DTU21 uses "mean_sea_surf_sol2" variable name.
+	grid, err := loadNetCDFGrid(s.mssPath, "lat", "lon", "mean_sea_surf_sol2")
 	if err != nil {
 		return fmt.Errorf("failed to load MSS grid: %w", err)
 	}
@@ -273,12 +274,81 @@ func readFloat64Var(v netcdf.Var) ([]float64, error) {
 }
 
 // read2DFloat64Var reads a 2D float64 array from a NetCDF variable.
+// Supports float64, float32, int32, and int16 types, with optional scale_factor.
 func read2DFloat64Var(v netcdf.Var, nRows, nCols int) ([][]float64, error) {
-	// Read as flat array.
-	flatData := make([]float64, nRows*nCols)
-	err := v.ReadFloat64s(flatData)
+	// Get variable type.
+	varType, err := v.Type()
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("failed to get variable type: %w", err)
+	}
+
+	var flatData []float64
+	totalSize := nRows * nCols
+
+	// Read data based on type.
+	switch varType {
+	case netcdf.DOUBLE, netcdf.FLOAT:
+		// Read as float64 directly.
+		flatData = make([]float64, totalSize)
+		err = v.ReadFloat64s(flatData)
+		if err != nil {
+			return nil, fmt.Errorf("failed to read float64: %w", err)
+		}
+	case netcdf.SHORT:
+		// Read as int16 and convert to float64.
+		int16Data := make([]int16, totalSize)
+		err = v.ReadInt16s(int16Data)
+		if err != nil {
+			return nil, fmt.Errorf("failed to read int16: %w", err)
+		}
+		// Convert int16 to float64.
+		flatData = make([]float64, totalSize)
+		for i, val := range int16Data {
+			flatData[i] = float64(val)
+		}
+	case netcdf.INT:
+		// Read as int32 and convert to float64.
+		int32Data := make([]int32, totalSize)
+		err = v.ReadInt32s(int32Data)
+		if err != nil {
+			return nil, fmt.Errorf("failed to read int32: %w", err)
+		}
+		// Convert int32 to float64.
+		flatData = make([]float64, totalSize)
+		for i, val := range int32Data {
+			flatData[i] = float64(val)
+		}
+	default:
+		return nil, fmt.Errorf("unsupported data type: %v (expected DOUBLE, FLOAT, INT, or SHORT)", varType)
+	}
+
+	// Apply scale_factor if present.
+	scaleAttr := v.Attr("scale_factor")
+	attrLen, err := scaleAttr.Len()
+	if err == nil && attrLen > 0 {
+		// scale_factor attribute exists.
+		var scaleVal float64
+
+		// Try reading as float64 first.
+		scaleData := make([]float64, 1)
+		err = scaleAttr.ReadFloat64s(scaleData)
+		if err == nil {
+			scaleVal = scaleData[0]
+		} else {
+			// If ReadFloat64s failed, try int32.
+			int32Data := make([]int32, 1)
+			err = scaleAttr.ReadInt32s(int32Data)
+			if err == nil {
+				scaleVal = float64(int32Data[0])
+			}
+		}
+
+		if err == nil && scaleVal != 0 {
+			// Apply scale factor to all values.
+			for i := range flatData {
+				flatData[i] *= scaleVal
+			}
+		}
 	}
 
 	// Convert to 2D array.

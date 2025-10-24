@@ -10,7 +10,8 @@ BINARY_PATH=./$(BINARY_NAME)
 # GCP parameters
 PROJECT_ID ?= $(shell gcloud config get-value project 2>/dev/null)
 REGION ?= asia-northeast1
-GCS_FES_BUCKET ?= $(PROJECT_ID)-tides-fes-data
+GCS_FES_BUCKET ?= tides-app-fes
+GCS_BATHY_BUCKET ?= tides-app-bathymetry
 
 # Go parameters
 GOCMD=go
@@ -309,8 +310,9 @@ gcs-delete-bucket: ## Delete GCS bucket (WARNING: destroys all FES data in cloud
 BATHY_DIR := ./data/bathymetry
 GEBCO_URL := https://dap.ceda.ac.uk/bodc/gebco/global/gebco_2025/ice_surface_elevation/netcdf/gebco_2025.zip?download=1
 GEBCO_FILE := GEBCO_2025.nc
-DTU_MSS_URL := https://ftp.space.dtu.dk/pub/DTU21/1_MIN/
-DTU_MSS_FILE := DTU21MSS_1min.nc
+DTU_MSS_URL := https://data.dtu.dk/ndownloader/files/53106539
+DTU_MSS_FILE := DTU21MSS_1min_WGS84.nc
+USER_AGENT := Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/141.0.0.0 Safari/537.36
 
 bathy-setup: ## Create bathymetry data directory
 	@echo "Creating bathymetry data directory..."
@@ -324,19 +326,33 @@ bathy-download-gebco: ## Download GEBCO 2025 bathymetry data (~4GB compressed, 7
 	@echo "License: Public Domain"
 	@echo ""
 	@mkdir -p $(BATHY_DIR)
-	@echo "Downloading GEBCO_2025 Grid (NetCDF format)..."
-	@echo "This will download, extract, and cleanup automatically."
-	@echo ""
-	@cd $(BATHY_DIR) && \
-	 echo "Downloading gebco_2025.zip (4GB)..." && \
-	 curl -L -o gebco_2025.zip "$(GEBCO_URL)" && \
-	 echo "Extracting NetCDF file..." && \
-	 unzip -j gebco_2025.zip "*/GEBCO_2025.nc" -d . && \
-	 mv GEBCO_2025.nc $(GEBCO_FILE) && \
-	 rm gebco_2025.zip && \
-	 echo "" && \
-	 echo "Download complete: $(BATHY_DIR)/$(GEBCO_FILE)" && \
-	 ls -lh $(GEBCO_FILE)
+	@if [ -f "$(BATHY_DIR)/$(GEBCO_FILE)" ]; then \
+		echo "✓ GEBCO file already exists: $(BATHY_DIR)/$(GEBCO_FILE)"; \
+		echo "Skipping download."; \
+		ls -lh $(BATHY_DIR)/$(GEBCO_FILE); \
+	else \
+		echo "Downloading GEBCO_2025 Grid (NetCDF format)..."; \
+		if [ -f "$(BATHY_DIR)/gebco_2025.zip" ]; then \
+			echo "Found existing gebco_2025.zip, checking integrity..."; \
+			if unzip -t $(BATHY_DIR)/gebco_2025.zip > /dev/null 2>&1; then \
+				echo "✓ Existing zip file is complete, extracting..."; \
+			else \
+				echo "⚠ Existing zip file is incomplete, resuming download..."; \
+				cd $(BATHY_DIR) && curl -C - -L -o gebco_2025.zip "$(GEBCO_URL)"; \
+			fi; \
+		else \
+			echo "Downloading gebco_2025.zip (4GB)..."; \
+			cd $(BATHY_DIR) && curl -L -o gebco_2025.zip "$(GEBCO_URL)"; \
+		fi; \
+		echo "Extracting NetCDF file..."; \
+		cd $(BATHY_DIR) && \
+		unzip -j gebco_2025.zip "GEBCO_2025.nc" -d . && \
+		mv GEBCO_2025.nc $(GEBCO_FILE) && \
+		rm gebco_2025.zip && \
+		echo "" && \
+		echo "Download complete: $(BATHY_DIR)/$(GEBCO_FILE)" && \
+		ls -lh $(GEBCO_FILE); \
+	fi
 
 bathy-download-dtu-mss: ## Download DTU21 Mean Sea Surface data (~500MB)
 	@echo "Downloading DTU21 Mean Sea Surface data..."
@@ -345,13 +361,19 @@ bathy-download-dtu-mss: ## Download DTU21 Mean Sea Surface data (~500MB)
 	@echo "License: Free for scientific and commercial use"
 	@echo ""
 	@mkdir -p $(BATHY_DIR)
-	@echo "Downloading $(DTU_MSS_FILE)..."
-	@cd $(BATHY_DIR) && \
-	 curl -o $(DTU_MSS_FILE) -L "$(DTU_MSS_URL)$(DTU_MSS_FILE)" || \
-	 wget -O $(DTU_MSS_FILE) "$(DTU_MSS_URL)$(DTU_MSS_FILE)"
-	@echo ""
-	@echo "Download complete: $(BATHY_DIR)/$(DTU_MSS_FILE)"
-	@ls -lh $(BATHY_DIR)/$(DTU_MSS_FILE)
+	@if [ -f "$(BATHY_DIR)/$(DTU_MSS_FILE)" ]; then \
+		echo "✓ DTU MSS file already exists: $(BATHY_DIR)/$(DTU_MSS_FILE)"; \
+		echo "Skipping download."; \
+		ls -lh $(BATHY_DIR)/$(DTU_MSS_FILE); \
+	else \
+		echo "Downloading $(DTU_MSS_FILE)..."; \
+		echo "Note: Using browser User-Agent to access DTU data repository"; \
+		cd $(BATHY_DIR) && \
+		curl -C - -o $(DTU_MSS_FILE) -L -A "$(USER_AGENT)" "$(DTU_MSS_URL)"; \
+		echo ""; \
+		echo "Download complete: $(BATHY_DIR)/$(DTU_MSS_FILE)"; \
+		ls -lh $(DTU_MSS_FILE); \
+	fi
 
 bathy-download-all: bathy-setup bathy-download-dtu-mss bathy-download-gebco ## Download all bathymetry data
 
@@ -392,8 +414,6 @@ bathy-clean: ## Remove downloaded bathymetry files
 	fi
 
 # GCS Bathymetry data targets
-GCS_BATHY_BUCKET ?= $(PROJECT_ID)-tides-bathymetry
-
 gcs-create-bathy-bucket: ## Create GCS bucket for bathymetry data
 	@echo "Creating Cloud Storage bucket for bathymetry data..."
 	@if [ -z "$(PROJECT_ID)" ]; then \
