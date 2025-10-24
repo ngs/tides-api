@@ -242,7 +242,7 @@ func loadNetCDFGrid(filepath, latVarName, lonVarName, dataVarName string) (*inte
 			return nil, err
 		}
 		values = transpose2D(transposed)
-	default:
+	case unknownOrder:
 		return nil, fmt.Errorf("dimension mismatch: data is [%d, %d], expected [%d, %d] or [%d, %d]",
 			dim0Len, dim1Len, nLat, nLon, nLon, nLat)
 	}
@@ -335,7 +335,7 @@ func read2DFloat64Var(v netcdf.Var, nRows, nCols int) ([][]float64, error) {
 		for i, val := range int32Data {
 			flatData[i] = float64(val)
 		}
-	default:
+	case netcdf.BYTE, netcdf.UBYTE, netcdf.CHAR, netcdf.USHORT, netcdf.UINT, netcdf.INT64, netcdf.UINT64, netcdf.STRING:
 		return nil, fmt.Errorf("unsupported data type: %v (expected DOUBLE, FLOAT, INT, or SHORT)", varType)
 	}
 
@@ -343,7 +343,7 @@ func read2DFloat64Var(v netcdf.Var, nRows, nCols int) ([][]float64, error) {
 	scaleAttr := v.Attr("scale_factor")
 	attrLen, err := scaleAttr.Len()
 	if err == nil && attrLen > 0 {
-		// scale_factor attribute exists.
+		// Scale_factor attribute exists.
 		var scaleVal float64
 
 		// Try reading as float64 first.
