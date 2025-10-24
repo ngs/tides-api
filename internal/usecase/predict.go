@@ -43,7 +43,7 @@ type PredictionResponse struct {
 	Constituents []string          `json:"constituents"`
 	Predictions  []PredictionPoint `json:"predictions"`
 	Extrema      ExtremaResponse   `json:"extrema"`
-	MSL          *float64          `json:"msl_m,omitempty"`           // Mean Sea Level in meters.
+	MSL          *float64          `json:"msl_m,omitempty"`          // Mean Sea Level in meters.
 	SeabedDepth  *float64          `json:"seabed_depth_m,omitempty"` // Seabed depth in meters (positive value).
 	Meta         map[string]string `json:"meta"`
 }
@@ -51,8 +51,8 @@ type PredictionResponse struct {
 // PredictionPoint represents a single tide height prediction.
 type PredictionPoint struct {
 	Time    string   `json:"time"`
-	HeightM float64  `json:"height_m"`              // Tide height relative to datum.
-	DepthM  *float64 `json:"depth_m,omitempty"`     // Water depth at this time (seabed_depth + msl + height).
+	HeightM float64  `json:"height_m"`          // Tide height relative to datum.
+	DepthM  *float64 `json:"depth_m,omitempty"` // Water depth at this time (seabed_depth + msl + height).
 }
 
 // ExtremaResponse contains high and low tides.
@@ -206,7 +206,7 @@ func (uc *PredictionUseCase) Execute(req PredictionRequest) (*PredictionResponse
 		}
 
 		// Calculate water depth if seabed depth is available.
-		// Water depth = seabed_depth + msl + tide_height
+		// Water depth = seabed_depth + msl + tide_height.
 		if metadata != nil && metadata.DepthM != nil {
 			waterDepth := *metadata.DepthM + msl + p.HeightM
 			roundedDepth := roundToDecimal(waterDepth, 3)
