@@ -6,6 +6,7 @@ import (
 	"log"
 	"os"
 
+	"go.ngs.io/tides-api/internal/adapter/geoid"
 	"go.ngs.io/tides-api/internal/adapter/store"
 	"go.ngs.io/tides-api/internal/adapter/store/bathymetry"
 	"go.ngs.io/tides-api/internal/adapter/store/csv"
@@ -38,6 +39,7 @@ func main() {
 	fesDir := getEnv("FES_DIR", "./data/fes")
 	gebcoPath := getEnv("BATHYMETRY_GEBCO_PATH", "")
 	mssPath := getEnv("BATHYMETRY_MSS_PATH", "")
+	geoidPath := getEnv("GEOID_EGM2008_PATH", "")
 
 	log.Printf("Starting Tide API server...")
 	log.Printf("Port: %s", port)
@@ -52,6 +54,15 @@ func main() {
 	var csvLoader store.ConstituentLoader = csvStore
 	var fesLoader store.ConstituentLoader = fesStore
 
+	// Initialize geoid store (optional, for MSL correction).
+	var geoidStore *geoid.Store
+	if geoidPath != "" {
+		log.Printf("Initializing EGM2008 geoid store")
+		log.Printf("  Geoid path: %s", geoidPath)
+		geoidStore = geoid.NewStore(geoidPath)
+		log.Printf("Geoid store initialized (will apply MSL correction)")
+	}
+
 	// Initialize bathymetry store (optional).
 	// Paths can be local files or GCS FUSE-mounted paths (e.g., /mnt/bathymetry/gebco.nc).
 	var bathyStore bathymetry.Store
@@ -63,7 +74,10 @@ func main() {
 		if mssPath != "" {
 			log.Printf("  MSS path: %s", mssPath)
 		}
-		bathyStore = bathymetry.NewLocalStore(gebcoPath, mssPath)
+		if geoidStore == nil && mssPath != "" {
+			log.Printf("  Warning: MSS data without geoid correction (results will be ellipsoidal)")
+		}
+		bathyStore = bathymetry.NewLocalStore(gebcoPath, mssPath, geoidStore)
 		log.Printf("Bathymetry store initialized")
 	} else {
 		log.Printf("Bathymetry store disabled (no data paths configured)")
@@ -116,6 +130,7 @@ func printUsage() {
 	fmt.Println("  CORS_ALLOWED_ORIGINS    Comma-separated list of allowed origins (default: all origins)")
 	fmt.Println("  BATHYMETRY_GEBCO_PATH   Path to GEBCO NetCDF file (optional, can be GCS FUSE mount)")
 	fmt.Println("  BATHYMETRY_MSS_PATH     Path to MSS NetCDF file (optional, can be GCS FUSE mount)")
+	fmt.Println("  GEOID_EGM2008_PATH      Path to EGM2008 geoid NetCDF file (optional, for MSL correction)")
 	fmt.Println()
 	fmt.Println("EXAMPLES:")
 	fmt.Println("  # Start server with default settings")

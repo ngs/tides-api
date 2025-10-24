@@ -68,7 +68,7 @@ jobs:
             --add-volume-mount volume=fes-data,mount-path=${{ env.FES_DIR }} \
             --add-volume name=bathy-data,type=cloud-storage,bucket=${{ env.GCS_BATHY_BUCKET }},readonly=true \
             --add-volume-mount volume=bathy-data,mount-path=${{ env.BATHY_DIR }} \
-            --set-env-vars "DATA_DIR=/app/data,FES_DIR=${{ env.FES_DIR }},BATHYMETRY_GEBCO_PATH=${{ env.BATHY_DIR }}/GEBCO_2025.nc,BATHYMETRY_MSS_PATH=${{ env.BATHY_DIR }}/DTU21MSS_1min_WGS84.nc,TZ=Asia/Tokyo,CORS_ALLOWED_ORIGINS=https://tides.ngs.io" \
+            --set-env-vars "DATA_DIR=/app/data,FES_DIR=${{ env.FES_DIR }},BATHYMETRY_GEBCO_PATH=${{ env.BATHY_DIR }}/GEBCO_2025.nc,BATHYMETRY_MSS_PATH=${{ env.BATHY_DIR }}/DTU21MSS_1min_WGS84.nc,GEOID_EGM2008_PATH=${{ env.BATHY_DIR }}/egm2008_1m.nc,TZ=Asia/Tokyo,CORS_ALLOWED_ORIGINS=https://tides.ngs.io" \
             --project=${{ env.PROJECT_ID }}
 
       - name: Wait for service to be ready

@@ -43,6 +43,7 @@ data/bathymetry/**/*.nc
 data/bathymetry/**/*.tar.gz
 data/bathymetry/**/*.zip
 data/bathymetry/.credentials
+gmt.history
 .fes_credentials
 
 # FES download temporary files
