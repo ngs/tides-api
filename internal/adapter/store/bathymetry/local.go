@@ -77,7 +77,7 @@ func (s *LocalStore) GetMetadata(lat, lon float64) (*domain.LocationMetadata, er
 
 		// DTU21 MSS is referenced to WGS84 ellipsoid.
 		// Apply geoid correction to convert to orthometric height (local datum).
-		// H (orthometric) = h (ellipsoidal) - N (geoid height)
+		// H (orthometric) = h (ellipsoidal) - N (geoid height).
 		if s.geoidStore != nil {
 			geoidHeight, err := s.geoidStore.GetGeoidHeight(lat, lon)
 			if err == nil {

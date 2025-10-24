@@ -160,6 +160,7 @@ issues:
       linters:
         - gochecknoinits
         - gochecknoglobals
+        - nestif
 
     # Domain layer - constituents have global data
     - path: internal/domain/constituents\.go
@@ -189,6 +190,16 @@ issues:
         - nestif
         - gocritic
         - revive
+
+    # Geoid adapter - NetCDF loading has necessary complexity
+    - path: internal/adapter/geoid/
+      linters:
+        - gochecknoglobals
+        - gocyclo
+        - nestif
+        - gocritic
+        - revive
+        - exhaustive
 
     # HTTP handlers - gin.Context methods don't always need error checks
     - path: internal/http/

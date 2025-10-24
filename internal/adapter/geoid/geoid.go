@@ -28,7 +28,8 @@ func NewStore(geoidPath string) *Store {
 // Positive values mean the geoid is above the ellipsoid.
 //
 // To convert from ellipsoidal height (h) to orthometric height (H):
-//   H = h - N
+//
+//	H = h - N
 func (s *Store) GetGeoidHeight(lat, lon float64) (float64, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
