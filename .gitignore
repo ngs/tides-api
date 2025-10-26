@@ -5,6 +5,8 @@
 *.so
 *.dylib
 tides-api
+jma-compare
+!cmd/*
 /server
 
 # Test binary, built with `go test -c`

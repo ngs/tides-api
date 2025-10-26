@@ -26,24 +26,24 @@ func NewHandler(predictionUC *usecase.PredictionUseCase) *Handler {
 
 // GetPredictions handles GET /v1/tides/predictions.
 func (h *Handler) GetPredictions(c *gin.Context) {
-    // Parse query parameters.
-    latStr := c.Query("lat")
-    lonStr := c.Query("lon")
-    stationID := c.Query("station_id")
-    startStr := c.Query("start")
-    endStr := c.Query("end")
-    intervalStr := c.Query("interval")
-    datum := c.Query("datum")
-    source := c.Query("source")
-    timezone := c.Query("timezone") // "utc" (default) or "jst"
-    datumOffsetStr := c.Query("datum_offset_m")
+	// Parse query parameters.
+	latStr := c.Query("lat")
+	lonStr := c.Query("lon")
+	stationID := c.Query("station_id")
+	startStr := c.Query("start")
+	endStr := c.Query("end")
+	intervalStr := c.Query("interval")
+	datum := c.Query("datum")
+	source := c.Query("source")
+	timezone := c.Query("timezone") // "utc" (default) or "jst".
+	datumOffsetStr := c.Query("datum_offset_m")
 
 	// Build request.
-    req := usecase.PredictionRequest{
-        Datum:  datum,
-        Source: source,
-        Timezone: timezone,
-    }
+	req := usecase.PredictionRequest{
+		Datum:    datum,
+		Source:   source,
+		Timezone: timezone,
+	}
 
 	// Parse lat/lon.
 	if latStr != "" && lonStr != "" {
@@ -101,20 +101,20 @@ func (h *Handler) GetPredictions(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": fmt.Sprintf("invalid interval: %v", err)})
 		return
 	}
-    req.Interval = interval
+	req.Interval = interval
 
-    // Parse optional datum offset.
-    if datumOffsetStr != "" {
-        off, err := strconv.ParseFloat(datumOffsetStr, 64)
-        if err != nil {
-            c.JSON(http.StatusBadRequest, gin.H{"error": fmt.Sprintf("invalid datum_offset_m: %v", err)})
-            return
-        }
-        req.DatumOffsetM = &off
-    }
+	// Parse optional datum offset.
+	if datumOffsetStr != "" {
+		off, err := strconv.ParseFloat(datumOffsetStr, 64)
+		if err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": fmt.Sprintf("invalid datum_offset_m: %v", err)})
+			return
+		}
+		req.DatumOffsetM = &off
+	}
 
 	// Execute use case.
-    response, err := h.predictionUC.Execute(req)
+	response, err := h.predictionUC.Execute(req)
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return

@@ -30,17 +30,17 @@ type PredictionRequest struct {
 	// Interval for predictions (e.g., 10 minutes).
 	Interval time.Duration
 
-    // Optional parameters.
-    Datum  string // E.g., "MSL", "LAT", "MLLW" - MVP uses MSL only.
-    Source string // "csv" or "fes" - if empty, auto-detect.
+	// Optional parameters.
+	Datum  string // E.g., "MSL", "LAT", "MLLW" - MVP uses MSL only.
+	Source string // "csv" or "fes" - if empty, auto-detect.
 
-    // Optional vertical datum offset in meters to adjust heights for comparison with external datums
-    // (e.g., JMA's DL/TP). Positive values raise all predicted heights by the given amount.
-    DatumOffsetM *float64
+	// Optional vertical datum offset in meters to adjust heights for comparison with external datums
+	// (e.g., JMA's DL/TP). Positive values raise all predicted heights by the given amount.
+	DatumOffsetM *float64
 
-    // Output timezone preference for formatted timestamps in the response.
-    // Supported: "utc" (default), "jst".
-    Timezone string
+	// Output timezone preference for formatted timestamps in the response.
+	// Supported: "utc" (default), "jst".
+	Timezone string
 }
 
 // PredictionResponse contains the tide prediction results.
@@ -183,16 +183,16 @@ func (uc *PredictionUseCase) Execute(req PredictionRequest) (*PredictionResponse
 		}
 	}
 
-    // Set up prediction parameters.
-    msl := 0.0
-    if metadata != nil {
-        msl = metadata.MSL
-    }
+	// Set up prediction parameters.
+	msl := 0.0
+	if metadata != nil {
+		msl = metadata.MSL
+	}
 
-    // Apply optional datum offset (e.g., to align with JMA DL/TP).
-    if req.DatumOffsetM != nil {
-        msl += *req.DatumOffsetM
-    }
+	// Apply optional datum offset (e.g., to align with JMA DL/TP).
+	if req.DatumOffsetM != nil {
+		msl += *req.DatumOffsetM
+	}
 
 	// Set longitude for Greenwich phase correction (only for lat/lon queries).
 	lon := 0.0
@@ -217,29 +217,29 @@ func (uc *PredictionUseCase) Execute(req PredictionRequest) (*PredictionResponse
 	// Refine extrema with parabolic interpolation.
 	extrema = domain.RefineExtrema(predictions, extrema)
 
-    // Choose output timezone.
-    tz := req.Timezone
-    if tz == "" {
-        tz = "utc"
-    }
-    var loc *time.Location
-    tzLabel := "+00:00"
-    switch tz {
-    case "jst", "JST":
-        loc = time.FixedZone("JST", 9*60*60)
-        tzLabel = "+09:00"
-    default:
-        loc = time.FixedZone("UTC", 0)
-        tzLabel = "+00:00"
-    }
+	// Choose output timezone.
+	tz := req.Timezone
+	if tz == "" {
+		tz = "utc"
+	}
+	var loc *time.Location
+	var tzLabel string
+	switch tz {
+	case "jst", "JST":
+		loc = time.FixedZone("JST", 9*60*60)
+		tzLabel = "+09:00"
+	default:
+		loc = time.FixedZone("UTC", 0)
+		tzLabel = "+00:00"
+	}
 
-    // Convert to response format.
-    predictionPoints := make([]PredictionPoint, len(predictions))
-    for i, p := range predictions {
-        point := PredictionPoint{
-            Time:    p.Time.In(loc).Format(time.RFC3339),
-            HeightM: roundToDecimal(p.HeightM),
-        }
+	// Convert to response format.
+	predictionPoints := make([]PredictionPoint, len(predictions))
+	for i, p := range predictions {
+		point := PredictionPoint{
+			Time:    p.Time.In(loc).Format(time.RFC3339),
+			HeightM: roundToDecimal(p.HeightM),
+		}
 
 		// Calculate water depth if seabed depth is available.
 		// Water depth = seabed_depth + msl + tide_height.
@@ -252,12 +252,12 @@ func (uc *PredictionUseCase) Execute(req PredictionRequest) (*PredictionResponse
 		predictionPoints[i] = point
 	}
 
-    highPoints := make([]PredictionPoint, len(extrema.Highs))
-    for i, h := range extrema.Highs {
-        point := PredictionPoint{
-            Time:    h.Time.In(loc).Format(time.RFC3339),
-            HeightM: roundToDecimal(h.HeightM),
-        }
+	highPoints := make([]PredictionPoint, len(extrema.Highs))
+	for i, h := range extrema.Highs {
+		point := PredictionPoint{
+			Time:    h.Time.In(loc).Format(time.RFC3339),
+			HeightM: roundToDecimal(h.HeightM),
+		}
 
 		// Calculate water depth if seabed depth is available.
 		if metadata != nil && metadata.DepthM != nil {
@@ -269,12 +269,12 @@ func (uc *PredictionUseCase) Execute(req PredictionRequest) (*PredictionResponse
 		highPoints[i] = point
 	}
 
-    lowPoints := make([]PredictionPoint, len(extrema.Lows))
-    for i, l := range extrema.Lows {
-        point := PredictionPoint{
-            Time:    l.Time.In(loc).Format(time.RFC3339),
-            HeightM: roundToDecimal(l.HeightM),
-        }
+	lowPoints := make([]PredictionPoint, len(extrema.Lows))
+	for i, l := range extrema.Lows {
+		point := PredictionPoint{
+			Time:    l.Time.In(loc).Format(time.RFC3339),
+			HeightM: roundToDecimal(l.HeightM),
+		}
 
 		// Calculate water depth if seabed depth is available.
 		if metadata != nil && metadata.DepthM != nil {
@@ -299,20 +299,20 @@ func (uc *PredictionUseCase) Execute(req PredictionRequest) (*PredictionResponse
 	}
 
 	// Build response.
-    response := &PredictionResponse{
-        Source:       source,
-        Datum:        datum,
-        Timezone:     tzLabel,
-        Constituents: constituentNames,
-        Predictions:  predictionPoints,
-        Extrema: ExtremaResponse{
-            Highs: highPoints,
-            Lows:  lowPoints,
-        },
-        Meta: map[string]string{
-            "model": "harmonic_v0",
-        },
-    }
+	response := &PredictionResponse{
+		Source:       source,
+		Datum:        datum,
+		Timezone:     tzLabel,
+		Constituents: constituentNames,
+		Predictions:  predictionPoints,
+		Extrema: ExtremaResponse{
+			Highs: highPoints,
+			Lows:  lowPoints,
+		},
+		Meta: map[string]string{
+			"model": "harmonic_v0",
+		},
+	}
 
 	// Add metadata if available.
 	if metadata != nil {
@@ -330,19 +330,19 @@ func (uc *PredictionUseCase) Execute(req PredictionRequest) (*PredictionResponse
 		}
 	}
 
-    // Add attribution based on source.
-    if source == sourceCSV {
-        response.Meta["attribution"] = "Mock CSV (for dev). Replace with FES later."
-    } else {
-        response.Meta["attribution"] = "FES2014/2022 tidal model"
-    }
+	// Add attribution based on source.
+	if source == sourceCSV {
+		response.Meta["attribution"] = "Mock CSV (for dev). Replace with FES later."
+	} else {
+		response.Meta["attribution"] = "FES2014/2022 tidal model"
+	}
 
-    // Record applied datum offset if provided.
-    if req.DatumOffsetM != nil {
-        response.Meta["datum_offset_m"] = fmt.Sprintf("%.3f", *req.DatumOffsetM)
-    }
+	// Record applied datum offset if provided.
+	if req.DatumOffsetM != nil {
+		response.Meta["datum_offset_m"] = fmt.Sprintf("%.3f", *req.DatumOffsetM)
+	}
 
-    return response, nil
+	return response, nil
 }
 
 // GetAllConstituents returns all available constituents.

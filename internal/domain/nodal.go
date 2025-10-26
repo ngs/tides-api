@@ -5,7 +5,6 @@ import "math"
 // AstronomicalNodalCorrection implements nodal corrections based on astronomical arguments.
 // Based on Schureman (1958) and Foreman (1977).
 type AstronomicalNodalCorrection struct {
-	referenceTime float64 // Hours since reference epoch (Unix epoch).
 }
 
 // NewAstronomicalNodalCorrection creates a nodal correction calculator.
@@ -14,7 +13,7 @@ func NewAstronomicalNodalCorrection() *AstronomicalNodalCorrection {
 }
 
 // GetFactors returns the nodal correction amplitude factor (f) and phase correction (u) in degrees.
-func (n *AstronomicalNodalCorrection) GetFactors(constituent string, t float64) (f float64, u float64) {
+func (n *AstronomicalNodalCorrection) GetFactors(constituent string, t float64) (f, u float64) {
 	// Calculate astronomical arguments at time t.
 	args := n.calculateAstronomicalArguments(t)
 
@@ -108,89 +107,89 @@ func (n *AstronomicalNodalCorrection) calculateAstronomicalArguments(t float64) 
 }
 
 // getM2Factors returns nodal factors for M2 (principal lunar semidiurnal).
-func (n *AstronomicalNodalCorrection) getM2Factors(args AstronomicalArguments) (f float64, u float64) {
+func (n *AstronomicalNodalCorrection) getM2Factors(args AstronomicalArguments) (f, u float64) {
 	// M2 nodal corrections (Schureman Table 14).
 	// Temporarily disable amplitude correction to test phase correction only.
 	sinI := math.Sin(Deg2Rad(args.I))
 
-	f = 1.0                // Temporarily disabled
-	u = -2.1 * sinI * sinI // degrees
+	f = 1.0                // Temporarily disabled.
+	u = -2.1 * sinI * sinI // Degrees.
 
 	return f, u
 }
 
 // getS2Factors returns nodal factors for S2 (principal solar semidiurnal).
-func (n *AstronomicalNodalCorrection) getS2Factors(args AstronomicalArguments) (f float64, u float64) {
+func (n *AstronomicalNodalCorrection) getS2Factors(args AstronomicalArguments) (f, u float64) {
 	// S2 has no nodal correction (solar constituent).
 	return 1.0, 0.0
 }
 
 // getN2Factors returns nodal factors for N2 (larger lunar elliptic semidiurnal).
-func (n *AstronomicalNodalCorrection) getN2Factors(args AstronomicalArguments) (f float64, u float64) {
+func (n *AstronomicalNodalCorrection) getN2Factors(args AstronomicalArguments) (f, u float64) {
 	// N2 nodal corrections.
 	// Temporarily disable amplitude correction to test phase correction only.
 	sinI := math.Sin(Deg2Rad(args.I))
 
-	f = 1.0                // Temporarily disabled
-	u = -2.1 * sinI * sinI // degrees
+	f = 1.0                // Temporarily disabled.
+	u = -2.1 * sinI * sinI // Degrees.
 
 	return f, u
 }
 
 // getK2Factors returns nodal factors for K2 (lunisolar semidiurnal).
-func (n *AstronomicalNodalCorrection) getK2Factors(args AstronomicalArguments) (f float64, u float64) {
+func (n *AstronomicalNodalCorrection) getK2Factors(args AstronomicalArguments) (f, u float64) {
 	// K2 nodal corrections.
 	// Temporarily disable amplitude correction to test phase correction only.
 	sin2I := math.Sin(2.0 * Deg2Rad(args.I))
 
-	f = 1.0 // Temporarily disabled
+	f = 1.0 // Temporarily disabled.
 	u = math.Atan2(0.1689*sin2I, 0.2523+0.1689*math.Cos(Deg2Rad(args.I)))
-	u = Rad2Deg(u) // Convert to degrees
+	u = Rad2Deg(u) // Convert to degrees.
 
 	return f, u
 }
 
 // getK1Factors returns nodal factors for K1 (lunisolar diurnal).
-func (n *AstronomicalNodalCorrection) getK1Factors(args AstronomicalArguments) (f float64, u float64) {
+func (n *AstronomicalNodalCorrection) getK1Factors(args AstronomicalArguments) (f, u float64) {
 	// K1 nodal corrections (Schureman Table 14).
 	// Temporarily disable amplitude correction to test phase correction only.
 	sinNu := math.Sin(Deg2Rad(args.nu))
 	sin2Nu := math.Sin(2.0 * Deg2Rad(args.nu))
 
-	f = 1.0                            // Temporarily disabled
-	u = -8.86*sinNu + 0.68*sin2Nu // degrees
+	f = 1.0                       // Temporarily disabled.
+	u = -8.86*sinNu + 0.68*sin2Nu // Degrees.
 
 	return f, u
 }
 
 // getO1Factors returns nodal factors for O1 (lunar diurnal).
-func (n *AstronomicalNodalCorrection) getO1Factors(args AstronomicalArguments) (f float64, u float64) {
+func (n *AstronomicalNodalCorrection) getO1Factors(args AstronomicalArguments) (f, u float64) {
 	// O1 nodal corrections (Schureman Table 14).
 	// Temporarily disable amplitude correction to test phase correction only.
 	sinNu := math.Sin(Deg2Rad(args.nu))
 	sin2Nu := math.Sin(2.0 * Deg2Rad(args.nu))
 
-	f = 1.0                          // Temporarily disabled
-	u = 10.8*sinNu - 1.3*sin2Nu // degrees
+	f = 1.0                     // Temporarily disabled.
+	u = 10.8*sinNu - 1.3*sin2Nu // Degrees.
 
 	return f, u
 }
 
 // getP1Factors returns nodal factors for P1 (solar diurnal).
-func (n *AstronomicalNodalCorrection) getP1Factors(args AstronomicalArguments) (f float64, u float64) {
+func (n *AstronomicalNodalCorrection) getP1Factors(args AstronomicalArguments) (f, u float64) {
 	// P1 has no nodal correction (solar constituent).
 	return 1.0, 0.0
 }
 
 // getQ1Factors returns nodal factors for Q1 (larger lunar elliptic diurnal).
-func (n *AstronomicalNodalCorrection) getQ1Factors(args AstronomicalArguments) (f float64, u float64) {
+func (n *AstronomicalNodalCorrection) getQ1Factors(args AstronomicalArguments) (f, u float64) {
 	// Q1 nodal corrections.
 	// Temporarily disable amplitude correction to test phase correction only.
 	sinNu := math.Sin(Deg2Rad(args.nu))
 	sin2Nu := math.Sin(2.0 * Deg2Rad(args.nu))
 
-	f = 1.0                          // Temporarily disabled
-	u = 10.8*sinNu - 1.3*sin2Nu // degrees
+	f = 1.0                     // Temporarily disabled.
+	u = 10.8*sinNu - 1.3*sin2Nu // Degrees.
 
 	return f, u
 }
