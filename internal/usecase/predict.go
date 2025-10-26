@@ -181,10 +181,17 @@ func (uc *PredictionUseCase) Execute(req PredictionRequest) (*PredictionResponse
 		msl = metadata.MSL
 	}
 
+	// Set longitude for Greenwich phase correction (only for lat/lon queries).
+	lon := 0.0
+	if req.Lon != nil {
+		lon = *req.Lon
+	}
+
 	params := domain.PredictionParams{
 		Constituents:    constituents,
 		MSL:             msl,
-		NodalCorrection: &domain.IdentityNodalCorrection{},
+		Longitude:       lon,
+		NodalCorrection: domain.NewAstronomicalNodalCorrection(),
 		ReferenceTime:   time.Unix(0, 0).UTC(), // Use Unix epoch as reference.
 	}
 

@@ -30,6 +30,7 @@ type Extrema struct {
 type PredictionParams struct {
 	Constituents    []ConstituentParam
 	MSL             float64         // Mean Sea Level offset in meters.
+	Longitude       float64         // Longitude in degrees (for Greenwich phase correction).
 	NodalCorrection NodalCorrection // Interface for nodal corrections.
 	ReferenceTime   time.Time       // Reference time for phase (usually Unix epoch or local epoch).
 }
@@ -55,7 +56,10 @@ func CalculateTideHeight(t time.Time, params PredictionParams) float64 {
 		f, u := params.NodalCorrection.GetFactors(c.Name, deltaHours)
 
 		// Calculate phase angle in degrees.
-		phaseAngleDeg := c.SpeedDegPerHr*deltaHours + c.PhaseDeg - u
+		// FES phase convention: h(t) = A * cos(ωt - φ + λ + u)
+		// where φ is Greenwich phase lag (in degrees) and λ is longitude (in degrees).
+		// The longitude correction accounts for the geographic offset from Greenwich.
+		phaseAngleDeg := c.SpeedDegPerHr*deltaHours - c.PhaseDeg + params.Longitude + u
 
 		// Convert to radians and calculate contribution.
 		phaseAngleRad := Deg2Rad(phaseAngleDeg)
