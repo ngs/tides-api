@@ -43,7 +43,7 @@ type PredictionRequest struct {
 	// Supported: "utc" (default), "jst".
 	Timezone string
 
-	// Optional phase convention selector: "fes_greenwich" (default) or "vu"
+	// Optional phase convention selector: "fes_greenwich" (default) or "vu".
 	PhaseConvention string
 }
 

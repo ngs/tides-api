@@ -9,9 +9,9 @@ import (
 	"go.ngs.io/tides-api/internal/domain"
 )
 
-// --- Datum offsets (nearest neighbor) ---
+// Datum offsets (nearest neighbor).
 
-type datumOffsetEntry struct {
+type datumOffsetEntry struct{
 	Name    string  `json:"name"`
 	Lat     float64 `json:"lat"`
 	Lon     float64 `json:"lon"`
@@ -56,7 +56,7 @@ func getAutoDatumOffset(lat, lon float64) (float64, bool) {
 	return 0, false
 }
 
-// --- Station constituent overrides ---
+// Station constituent overrides.
 
 type overrideConstituent struct {
 	Name       string  `json:"name"`
