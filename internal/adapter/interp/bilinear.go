@@ -97,12 +97,12 @@ func (g *Grid2D) Validate() error {
 	// Check that coordinates are sorted and unique.
 	for i := 1; i < len(g.X); i++ {
 		if g.X[i] <= g.X[i-1] {
-			return fmt.Errorf("X coordinates must be strictly increasing")
+			return fmt.Errorf("x coordinates must be strictly increasing")
 		}
 	}
 	for i := 1; i < len(g.Y); i++ {
 		if g.Y[i] <= g.Y[i-1] {
-			return fmt.Errorf("Y coordinates must be strictly increasing")
+			return fmt.Errorf("y coordinates must be strictly increasing")
 		}
 	}
 

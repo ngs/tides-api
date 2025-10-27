@@ -21,9 +21,79 @@ type LocalStore struct {
 	geoidStore *geoid.Store
 
 	// Cached grids (loaded on demand).
-	depthGrid *interp.Grid2D
-	mslGrid   *interp.Grid2D
-	mu        sync.RWMutex
+	depthGrid   *interp.Grid2D
+	depthBounds *gridBounds
+	mslGrid     *interp.Grid2D
+	mslBounds   *gridBounds
+	mu          sync.RWMutex
+}
+
+type gridBounds struct {
+	minLat, maxLat float64
+	minLon, maxLon float64
+	lonWrap360     bool
+}
+
+func (b *gridBounds) contains(lat, lon float64) bool {
+	if b == nil {
+		return false
+	}
+	lonCheck := lon
+	if b.lonWrap360 {
+		lonCheck = normalizeLon360(lonCheck)
+	}
+	return lat >= b.minLat && lat <= b.maxLat && lonCheck >= b.minLon && lonCheck <= b.maxLon
+}
+
+func boundsFromGrid(grid *interp.Grid2D) *gridBounds {
+	if grid == nil || len(grid.X) == 0 || len(grid.Y) == 0 {
+		return nil
+	}
+	wrap := lonAxisRequiresWrap(grid.X)
+	minLon := grid.X[0]
+	maxLon := grid.X[len(grid.X)-1]
+	if minLon > maxLon {
+		minLon, maxLon = maxLon, minLon
+	}
+	minLat := grid.Y[0]
+	maxLat := grid.Y[len(grid.Y)-1]
+	if minLat > maxLat {
+		minLat, maxLat = maxLat, minLat
+	}
+	return &gridBounds{
+		minLat:     minLat,
+		maxLat:     maxLat,
+		minLon:     minLon,
+		maxLon:     maxLon,
+		lonWrap360: wrap,
+	}
+}
+
+func lonAxisRequiresWrap(lons []float64) bool {
+	if len(lons) == 0 {
+		return false
+	}
+	min := lons[0]
+	max := lons[len(lons)-1]
+	if min > max {
+		min, max = max, min
+	}
+	return min >= 0 && max > 180
+}
+
+func normalizeLon360(lon float64) float64 {
+	lon = math.Mod(lon, 360)
+	if lon < 0 {
+		lon += 360
+	}
+	return lon
+}
+
+func normalizeLonForAxis(lons []float64, lon float64) float64 {
+	if lonAxisRequiresWrap(lons) {
+		return normalizeLon360(lon)
+	}
+	return lon
 }
 
 // NewLocalStore creates a new local file-based bathymetry store.
@@ -41,16 +111,16 @@ func (s *LocalStore) GetMetadata(lat, lon float64) (*domain.LocationMetadata, er
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	// Load MSL grid if not cached.
-	if s.mslGrid == nil && s.mssPath != "" {
+	// Load MSL grid if needed.
+	if s.mssPath != "" && (s.mslGrid == nil || !s.mslBounds.contains(lat, lon)) {
 		if err := s.loadMSSGrid(lat, lon); err != nil {
 			// MSL is optional - log warning but continue.
 			fmt.Fprintf(os.Stderr, "Warning: failed to load MSS grid: %v\n", err)
 		}
 	}
 
-	// Load depth grid if not cached.
-	if s.depthGrid == nil && s.gebcoPath != "" {
+	// Load depth grid if needed.
+	if s.gebcoPath != "" && (s.depthGrid == nil || !s.depthBounds.contains(lat, lon)) {
 		if err := s.loadDepthGrid(lat, lon); err != nil {
 			// Depth is optional - log warning but continue.
 			fmt.Fprintf(os.Stderr, "Warning: failed to load depth grid: %v\n", err)
@@ -70,7 +140,8 @@ func (s *LocalStore) GetMetadata(lat, lon float64) (*domain.LocationMetadata, er
 
 	// Interpolate MSL.
 	if s.mslGrid != nil {
-		msl, err := s.mslGrid.InterpolateAt(lon, lat)
+		lonMSL := normalizeLonForAxis(s.mslGrid.X, lon)
+		msl, err := s.mslGrid.InterpolateAt(lonMSL, lat)
 		if err != nil {
 			// If interpolation fails (e.g., out of bounds), return nil.
 			return nil, nil
@@ -97,7 +168,8 @@ func (s *LocalStore) GetMetadata(lat, lon float64) (*domain.LocationMetadata, er
 
 	// Interpolate depth.
 	if s.depthGrid != nil {
-		depth, err := s.depthGrid.InterpolateAt(lon, lat)
+		lonDepth := normalizeLonForAxis(s.depthGrid.X, lon)
+		depth, err := s.depthGrid.InterpolateAt(lonDepth, lat)
 		if err != nil {
 			// If interpolation fails, depth remains nil.
 		} else {
@@ -129,6 +201,7 @@ func (s *LocalStore) loadMSSGrid(lat, lon float64) error {
 	}
 
 	s.mslGrid = grid
+	s.mslBounds = boundsFromGrid(grid)
 	return nil
 }
 
@@ -143,6 +216,7 @@ func (s *LocalStore) loadDepthGrid(lat, lon float64) error {
 	}
 
 	s.depthGrid = grid
+	s.depthBounds = boundsFromGrid(grid)
 	return nil
 }
 
@@ -204,11 +278,27 @@ func loadNetCDFGridSubset(filepath, latVarName, lonVarName, dataVarName string, 
 	var subsetLat, subsetLon []float64
 
 	if margin > 0 {
+		adjLon := normalizeLonForAxis(lonData, targetLon)
+		adjLonMinus := normalizeLonForAxis(lonData, targetLon-margin)
+		adjLonPlus := normalizeLonForAxis(lonData, targetLon+margin)
+
 		// Find indices for the subset region.
 		latStartIdx := findNearestIndex(latData, targetLat-margin)
 		latEndIdx := findNearestIndex(latData, targetLat+margin)
-		lonStartIdx := findNearestIndex(lonData, targetLon-margin)
-		lonEndIdx := findNearestIndex(lonData, targetLon+margin)
+		lonStartIdx := findNearestIndex(lonData, adjLonMinus)
+		lonEndIdx := findNearestIndex(lonData, adjLonPlus)
+		if lonStartIdx == lonEndIdx {
+			// Ensure at least one additional column if possible.
+			lonEndIdx = clamp(lonEndIdx+1, 0, len(lonData)-1)
+		}
+		// If adjusted lon fell outside range (e.g., wrapped) ensure target column included.
+		lonTargetIdx := findNearestIndex(lonData, adjLon)
+		if lonTargetIdx < lonStartIdx {
+			lonStartIdx = lonTargetIdx
+		}
+		if lonTargetIdx > lonEndIdx {
+			lonEndIdx = lonTargetIdx
+		}
 
 		// Ensure proper ordering (start <= end).
 		if latStartIdx > latEndIdx {

@@ -16,7 +16,7 @@ type ConstituentParam struct {
 	SpeedDegPerHr float64 // Angular speed in degrees per hour.
 }
 
-// Standard tidal constituents with their angular speeds (deg/hour).
+// StandardConstituents contains tidal constituents with their angular speeds (deg/hour).
 // Reference: https://www.pmel.noaa.gov/pubs/PDF/park2589/park2589.pdf
 var StandardConstituents = map[string]float64{
 	// Principal lunar semidiurnal.
@@ -66,11 +66,13 @@ type NodalCorrection interface {
 // IdentityNodalCorrection is a dummy implementation that returns no correction.
 type IdentityNodalCorrection struct{}
 
-func (i *IdentityNodalCorrection) GetFactors(constituent string, t float64) (float64, float64) {
+// GetFactors returns the nodal correction factors (no correction for identity).
+func (i *IdentityNodalCorrection) GetFactors(_ string, _ float64) (float64, float64) {
     return 1.0, 0.0
 }
 
-func (i *IdentityNodalCorrection) GetEquilibriumArgument(constituent string, t float64) float64 {
+// GetEquilibriumArgument returns the equilibrium argument (no correction for identity).
+func (i *IdentityNodalCorrection) GetEquilibriumArgument(_ string, _ float64) float64 {
     return 0.0
 }
 

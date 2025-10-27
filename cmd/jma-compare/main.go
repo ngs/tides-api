@@ -4,7 +4,6 @@
 package main
 
 import (
-	"bufio"
 	"context"
 	"encoding/json"
 	"flag"
@@ -12,9 +11,9 @@ import (
 	"io"
 	"net/http"
 	"os"
-	"strconv"
-	"strings"
 	"time"
+
+	"go.ngs.io/tides-api/internal/jma"
 )
 
 type apiPrediction struct {
@@ -24,14 +23,6 @@ type apiPrediction struct {
 
 type apiResponse struct {
 	Predictions []apiPrediction `json:"predictions"`
-}
-
-type jmaHourlyData struct {
-	Year    int
-	Month   int
-	Day     int
-	Station string
-	Hourly  []float64
 }
 
 func fetch(url string) ([]byte, error) {
@@ -58,98 +49,25 @@ func fetch(url string) ([]byte, error) {
 	return io.ReadAll(resp.Body)
 }
 
-// parseJMAHourly parses a JMA fixed-width line and returns 24 hourly heights in meters.
-// Spec: columns 1-72 -> 24 values of 3 chars each (cm), 73-78: YY MM DD, 79-80: station code.
-func parseJMAHourly(line string) (*jmaHourlyData, error) {
-	if len(line) < 80 {
-		return nil, fmt.Errorf("line too short: %d", len(line))
-	}
-	hourly := make([]float64, 24)
-	for i := 0; i < 24; i++ {
-		start := 0 + 3*i
-		end := start + 3
-		if end > len(line) {
-			return nil, fmt.Errorf("unexpected end of line while parsing hourly at %d", i)
-		}
-		raw := strings.TrimSpace(line[start:end])
-		if raw == "" {
-			raw = "999"
-		}
-		v, convErr := strconv.Atoi(raw)
-		if convErr != nil {
-			// Some lines may contain minus sign separated by space, try to fix.
-			raw2 := strings.ReplaceAll(raw, " ", "")
-			v, convErr = strconv.Atoi(raw2)
-			if convErr != nil {
-				return nil, fmt.Errorf("invalid hourly value '%s' at %d: %v", raw, i, convErr)
-			}
-		}
-		if v == 999 {
-			hourly[i] = 0 // Treat as missing; keep 0 to avoid NaN in stats.
-		} else {
-			hourly[i] = float64(v) / 100.0
-		}
-	}
-
-	// Date.
-	yStr := strings.TrimSpace(line[72:74])
-	mStr := strings.TrimSpace(line[74:76])
-	dStr := strings.TrimSpace(line[76:78])
-	y, err := strconv.Atoi(yStr)
-	if err != nil {
-		return nil, fmt.Errorf("invalid year '%s': %v", yStr, err)
-	}
-	m, err := strconv.Atoi(mStr)
-	if err != nil {
-		return nil, fmt.Errorf("invalid month '%s': %v", mStr, err)
-	}
-	d, err := strconv.Atoi(dStr)
-	if err != nil {
-		return nil, fmt.Errorf("invalid day '%s': %v", dStr, err)
-	}
-	station := strings.TrimSpace(line[78:80])
-	return &jmaHourlyData{
-		Year:    y,
-		Month:   m,
-		Day:     d,
-		Station: station,
-		Hourly:  hourly,
-	}, nil
-}
-
-// loadJMAData loads JMA data from a file or URL.
-func loadJMAData(jmaPath string) ([]byte, error) {
-	if strings.HasPrefix(jmaPath, "http://") || strings.HasPrefix(jmaPath, "https://") {
-		return fetch(jmaPath)
-	}
-	return os.ReadFile(jmaPath)
-}
-
-// findTargetLine finds the target date line in JMA data.
-func findTargetLine(data []byte, station, dateStr string) ([]float64, error) {
+// findTargetRecord extracts hourly heights for the specified JST date.
+func findTargetRecord(records []jma.HourlyRecord, dateStr string) ([]float64, error) {
 	target, err := time.Parse("2006-01-02", dateStr)
 	if err != nil {
 		return nil, fmt.Errorf("invalid date format: %v", err)
 	}
-	y2 := target.Year() % 100
-	m2 := int(target.Month())
-	d2 := target.Day()
-
-	scanner := bufio.NewScanner(strings.NewReader(string(data)))
-	for scanner.Scan() {
-		line := scanner.Text()
-		jmaData, parseErr := parseJMAHourly(line)
-		if parseErr != nil {
-			continue
-		}
-		if jmaData.Station == station && jmaData.Year == y2 && jmaData.Month == m2 && jmaData.Day == d2 {
-			return jmaData.Hourly, nil
+	locDate := time.Date(target.Year(), target.Month(), target.Day(), 0, 0, 0, 0, jma.JSTLocation)
+	for _, rec := range records {
+		if rec.Time.Equal(locDate) {
+			hours := make([]float64, 24)
+			for i := 0; i < 24; i++ {
+				if rec.Valid[i] {
+					hours[i] = rec.Hourly[i]
+				}
+			}
+			return hours, nil
 		}
 	}
-	if err := scanner.Err(); err != nil {
-		return nil, fmt.Errorf("failed to scan JMA file: %v", err)
-	}
-	return nil, fmt.Errorf("JMA line not found for station=%s date=%s", station, dateStr)
+	return nil, fmt.Errorf("JMA record not found for date %s", dateStr)
 }
 
 // fetchAPIData fetches and parses API data into a map.
@@ -231,14 +149,14 @@ func main() {
 	}
 
 	// Load JMA file.
-	data, err := loadJMAData(jmaPath)
+	records, err := jma.LoadStationRecordsFromPath(jmaPath, station)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "failed to load JMA: %v\n", err)
 		os.Exit(1)
 	}
 
 	// Find target line.
-	hourly, err := findTargetLine(data, station, dateStr)
+	hourly, err := findTargetRecord(records, dateStr)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "%v\n", err)
 		os.Exit(1)

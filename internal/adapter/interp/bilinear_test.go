@@ -5,7 +5,7 @@ import (
 	"testing"
 )
 
-// TestBilinearInterpolate_CenterPoint tests interpolation at the center of a grid cell
+// TestBilinearInterpolate_CenterPoint tests interpolation at the center of a grid cell.
 func TestBilinearInterpolate_CenterPoint(t *testing.T) {
 	cell := GridCell{
 		X0: 0.0, X1: 2.0,

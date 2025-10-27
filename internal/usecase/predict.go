@@ -1,15 +1,13 @@
+// Package usecase contains business logic for tide predictions.
 package usecase
 
 import (
-    "fmt"
-    "time"
-    "os"
-    "encoding/json"
-    "math"
+	"fmt"
+	"time"
 
-    "go.ngs.io/tides-api/internal/adapter/store"
-    "go.ngs.io/tides-api/internal/adapter/store/bathymetry"
-    "go.ngs.io/tides-api/internal/domain"
+	"go.ngs.io/tides-api/internal/adapter/store"
+	"go.ngs.io/tides-api/internal/adapter/store/bathymetry"
+	"go.ngs.io/tides-api/internal/domain"
 )
 
 const (
@@ -43,10 +41,10 @@ type PredictionRequest struct {
 
 	// Output timezone preference for formatted timestamps in the response.
 	// Supported: "utc" (default), "jst".
-    Timezone string
+	Timezone string
 
-    // Optional phase convention selector: "fes_greenwich" (default) or "vu"
-    PhaseConvention string
+	// Optional phase convention selector: "fes_greenwich" (default) or "vu"
+	PhaseConvention string
 }
 
 // PredictionResponse contains the tide prediction results.
@@ -189,67 +187,73 @@ func (uc *PredictionUseCase) Execute(req PredictionRequest) (*PredictionResponse
 		}
 	}
 
-    // Set up prediction parameters.
-    msl := 0.0
-    if metadata != nil {
-        msl = metadata.MSL
-    }
+	// Set up prediction parameters.
+	msl := 0.0
+	if metadata != nil {
+		msl = metadata.MSL
+	}
 
-    // Apply optional datum offset (e.g., to align with JMA DL/TP).
-    if req.DatumOffsetM != nil {
-        msl += *req.DatumOffsetM
-    } else if req.Lat != nil && req.Lon != nil {
-        // Auto datum offset: attempt to load nearest known offset (e.g., JMA DL/TP) and apply.
-        if off, ok := getAutoDatumOffset(*req.Lat, *req.Lon); ok {
-            msl += off
-        }
-    }
+	// Apply optional datum offset (e.g., to align with JMA DL/TP).
+	if req.DatumOffsetM != nil {
+		msl += *req.DatumOffsetM
+	} else if req.Lat != nil && req.Lon != nil {
+		// Auto datum offset: attempt to load nearest known offset (e.g., JMA DL/TP) and apply.
+		if off, ok := getAutoDatumOffset(*req.Lat, *req.Lon); ok {
+			msl += off
+		}
+	}
 
-    // Set longitude for Greenwich phase correction (only for lat/lon queries).
-    lon := 0.0
-    if req.Lon != nil {
-        lon = *req.Lon
-    }
+	if req.Lat != nil && req.Lon != nil {
+		constituents = applyStationOverride(*req.Lat, *req.Lon, constituents, &msl)
+	}
 
-    // Choose prediction phase convention.
-    var phaseConv domain.PhaseConvention
-    switch req.PhaseConvention {
-    case "vu", "VU":
-        phaseConv = domain.PhaseConvVu
-    default:
-        phaseConv = domain.PhaseConvFESGreenwich
-    }
+	// Set longitude for Greenwich phase correction (only for lat/lon queries).
+	lon := 0.0
+	if req.Lon != nil {
+		lon = *req.Lon
+	}
 
-    // Reference time: use FES epoch for FES source to align phases, else Unix epoch.
-    refTime := time.Unix(0, 0).UTC()
-    if source == sourceFES {
-        // FES2014 phases are commonly referenced to 2012-01-01 00:00:00 UTC.
-        refTime = time.Date(2012, 1, 1, 0, 0, 0, 0, time.UTC)
-    }
+	// Choose prediction phase convention.
+	var phaseConv domain.PhaseConvention
+	switch req.PhaseConvention {
+	case "vu", "VU":
+		phaseConv = domain.PhaseConvVu
+	default:
+		phaseConv = domain.PhaseConvFESGreenwich
+	}
 
-    params := domain.PredictionParams{
-        Constituents:    constituents,
-        MSL:             msl,
-        Longitude:       lon,
-        NodalCorrection: domain.NewAstronomicalNodalCorrection(),
-        ReferenceTime:   refTime,
-        PhaseConvention: phaseConv,
-    }
+	// Reference time: use FES epoch for FES source to align phases, else Unix epoch.
+	refTime := time.Unix(0, 0).UTC()
+	if source == sourceFES {
+		// FES2014 phases are commonly referenced to 2012-01-01 00:00:00 UTC.
+		refTime = time.Date(2012, 1, 1, 0, 0, 0, 0, time.UTC)
+	}
 
-	// Generate predictions.
+	params := domain.PredictionParams{
+		Constituents:    constituents,
+		MSL:             msl,
+		Longitude:       lon,
+		NodalCorrection: domain.NewAstronomicalNodalCorrection(),
+		ReferenceTime:   refTime,
+		PhaseConvention: phaseConv,
+	}
+
+	// Generate predictions at requested interval.
 	predictions := domain.GeneratePredictions(req.Start, req.End, req.Interval, params)
 
-	// Find extrema.
-	extrema := domain.FindExtrema(predictions)
+	// Compute extrema on high-resolution (1m) grid for accurate times regardless of interval.
+	preciseInterval := time.Minute
+	if req.Interval < preciseInterval {
+		preciseInterval = req.Interval
+	}
+	precisePredictions := domain.GeneratePredictions(req.Start, req.End, preciseInterval, params)
+	extrema := domain.RefineExtrema(precisePredictions, domain.FindExtrema(precisePredictions))
 
-	// Refine extrema with parabolic interpolation.
-	extrema = domain.RefineExtrema(predictions, extrema)
-
-    // Choose output timezone.
-    tz := req.Timezone
-    if tz == "" {
-        tz = "utc"
-    }
+	// Choose output timezone.
+	tz := req.Timezone
+	if tz == "" {
+		tz = "utc"
+	}
 	var loc *time.Location
 	var tzLabel string
 	switch tz {
@@ -398,65 +402,6 @@ func (uc *PredictionUseCase) GetBathymetry(lat, lon float64) (*domain.LocationMe
 
 // Helper function to round to 3 decimal places.
 func roundToDecimal(val float64) float64 {
-    multiplier := 1000.0
-    return float64(int(val*multiplier+0.5)) / multiplier
-}
-
-// --- Auto datum offset (nearest-neighbor) ---
-
-type datumOffsetEntry struct {
-    Name    string  `json:"name"`
-    Lat     float64 `json:"lat"`
-    Lon     float64 `json:"lon"`
-    OffsetM float64 `json:"offset_m"`
-}
-
-var (
-    datumOffsetsLoaded bool
-    datumOffsetTable   []datumOffsetEntry
-)
-
-// getAutoDatumOffset returns a nearest offset for given lat/lon if available.
-// Loads from DATUM_OFFSETS_PATH or data/jma_datum_offsets.json.
-func getAutoDatumOffset(lat, lon float64) (float64, bool) {
-    if !datumOffsetsLoaded {
-        path := os.Getenv("DATUM_OFFSETS_PATH")
-        if path == "" {
-            path = "data/jma_datum_offsets.json"
-        }
-        if b, err := os.ReadFile(path); err == nil {
-            var arr []datumOffsetEntry
-            if err := json.Unmarshal(b, &arr); err == nil {
-                datumOffsetTable = arr
-            }
-        }
-        datumOffsetsLoaded = true
-    }
-    if len(datumOffsetTable) == 0 {
-        return 0, false
-    }
-    bestD := math.MaxFloat64
-    best := 0.0
-    for _, e := range datumOffsetTable {
-        d := haversineKm(lat, lon, e.Lat, e.Lon)
-        if d < bestD {
-            bestD = d
-            best = e.OffsetM
-        }
-    }
-    // Apply only if within sensible radius (e.g., 80 km)
-    if bestD <= 80 {
-        return best, true
-    }
-    return 0, false
-}
-
-func haversineKm(lat1, lon1, lat2, lon2 float64) float64 {
-    const R = 6371.0
-    toRad := func(x float64) float64 { return x * math.Pi / 180.0 }
-    dLat := toRad(lat2 - lat1)
-    dLon := toRad(lon2 - lon1)
-    a := math.Sin(dLat/2)*math.Sin(dLat/2) + math.Cos(toRad(lat1))*math.Cos(toRad(lat2))*math.Sin(dLon/2)*math.Sin(dLon/2)
-    c := 2 * math.Atan2(math.Sqrt(a), math.Sqrt(1-a))
-    return R * c
+	multiplier := 1000.0
+	return float64(int(val*multiplier+0.5)) / multiplier
 }

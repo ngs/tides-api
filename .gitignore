@@ -8,6 +8,7 @@
 /jma-compare
 /server
 .gocache
+.cache
 
 # Test binary, built with `go test -c`
 *.test

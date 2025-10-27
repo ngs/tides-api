@@ -1,3 +1,4 @@
+// Package geoid provides access to EGM2008 geoid data for MSL corrections.
 package geoid
 
 import (

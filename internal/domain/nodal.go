@@ -5,52 +5,58 @@ import "math"
 // AstronomicalNodalCorrection implements nodal corrections based on astronomical arguments.
 // Based on Schureman (1958) and Foreman (1977).
 type AstronomicalNodalCorrection struct {
-    coeffs *NodalCoeffSet
+	coeffs *NodalCoeffSet
 }
 
 // NewAstronomicalNodalCorrection creates a nodal correction calculator.
 func NewAstronomicalNodalCorrection() *AstronomicalNodalCorrection {
-    nc := &AstronomicalNodalCorrection{}
-    if set, err := LoadNodalCoeffSetFromEnv(); err == nil {
-        nc.coeffs = set
-    }
-    return nc
+	nc := &AstronomicalNodalCorrection{}
+	if set, err := LoadNodalCoeffSetFromEnv(); err == nil {
+		nc.coeffs = set
+	}
+	return nc
 }
 
 // GetFactors returns the nodal correction amplitude factor (f) and phase correction (u) in degrees.
 func (n *AstronomicalNodalCorrection) GetFactors(constituent string, t float64) (f, u float64) {
-    // Calculate astronomical arguments at time t.
-    args := n.calculateAstronomicalArguments(t)
+	// Calculate astronomical arguments at time t.
+	args := n.calculateAstronomicalArguments(t)
 
-    // Use external coefficients if available (Fourier series in N).
-    if n.coeffs != nil {
-        if c, ok := n.coeffs.ByName[constituent]; ok {
-            N := args.N
-            f = c.EvalF(N)
-            u = c.EvalU(N)
-            if f == 0 {
-                f = 1
-            }
-            return f, u
-        }
-    }
+	// Use external coefficients if available (Fourier series in N).
+	if n.coeffs != nil {
+		if c, ok := n.coeffs.ByName[constituent]; ok {
+			N := args.N
+			if nf, nu, ok := c.EvalNonlinear(N); ok {
+				if nf == 0 {
+					nf = 1
+				}
+				return nf, nu
+			}
+			f = c.EvalF(N)
+			u = c.EvalU(N)
+			if f == 0 {
+				f = 1
+			}
+			return f, u
+		}
+	}
 
-    // Use built-in nonlinear coefficients (pyTMD-derived) if available.
-    if coeff, ok := builtInNonlinearCoeffs[constituent]; ok {
-        Nrad := Deg2Rad(args.N)
-        // term1 = sum a_k sin(kN), term2 = b0 + sum b_k cos(kN)
-        term1 := 0.0
-        for k, a := range coeff.term1Sin {
-            term1 += a * math.Sin(float64(k)*Nrad)
-        }
-        term2 := coeff.term2Const
-        for k, b := range coeff.term2Cos {
-            term2 += b * math.Cos(float64(k)*Nrad)
-        }
-        f = math.Sqrt(term1*term1 + term2*term2)
-        u = Rad2Deg(math.Atan2(term1, term2))
-        return f, u
-    }
+	// Use built-in nonlinear coefficients (pyTMD-derived) if available.
+	if coeff, ok := builtInNonlinearCoeffs[constituent]; ok {
+		Nrad := Deg2Rad(args.N)
+		// term1 = sum a_k sin(kN), term2 = b0 + sum b_k cos(kN)
+		term1 := 0.0
+		for k, a := range coeff.term1Sin {
+			term1 += a * math.Sin(float64(k)*Nrad)
+		}
+		term2 := coeff.term2Const
+		for k, b := range coeff.term2Cos {
+			term2 += b * math.Cos(float64(k)*Nrad)
+		}
+		f = math.Sqrt(term1*term1 + term2*term2)
+		u = Rad2Deg(math.Atan2(term1, term2))
+		return f, u
+	}
 
 	// Get nodal corrections for each constituent.
 	switch constituent {
@@ -79,40 +85,40 @@ func (n *AstronomicalNodalCorrection) GetFactors(constituent string, t float64) 
 // GetEquilibriumArgument returns an approximate equilibrium argument V (degrees)
 // for the given constituent at time t (hours since Unix epoch).
 // Placeholder returns 0 until the full astronomical series is integrated.
-func (n *AstronomicalNodalCorrection) GetEquilibriumArgument(constituent string, t float64) float64 {
-    if n.coeffs != nil {
-        if c, ok := n.coeffs.ByName[constituent]; ok {
-            return c.V0
-        }
-    }
-    return 0.0
+func (n *AstronomicalNodalCorrection) GetEquilibriumArgument(constituent string, _ float64) float64 {
+	if n.coeffs != nil {
+		if c, ok := n.coeffs.ByName[constituent]; ok {
+			return c.V0
+		}
+	}
+	return 0.0
 }
 
 // Nonlinear nodal coefficients structure: f,u computed via sqrt/atan2 of sin/cos series in N (radians).
 type nonlinearCoeff struct {
-    term1Sin  map[int]float64 // a_k for sin(kN)
-    term2Const float64        // b0
-    term2Cos  map[int]float64 // b_k for cos(kN)
+	term1Sin   map[int]float64 // a_k for sin(kN)
+	term2Const float64         // b0
+	term2Cos   map[int]float64 // b_k for cos(kN)
 }
 
 // Built-in coefficients for major constituents (pyTMD-derived; N in radians).
 var builtInNonlinearCoeffs = map[string]nonlinearCoeff{
-    // M2: Principal lunar semidiurnal
-    "M2": { term1Sin: map[int]float64{1: -0.03731, 2: 0.00052}, term2Const: 1.0, term2Cos: map[int]float64{1: -0.03731, 2: 0.00052} },
-    // S2: Principal solar semidiurnal (very small nodal effect)
-    "S2": { term1Sin: map[int]float64{1: 0.00225}, term2Const: 1.0, term2Cos: map[int]float64{1: 0.00225} },
-    // N2: Lunar elliptical semidiurnal (similar pattern to M2 per provided table)
-    "N2": { term1Sin: map[int]float64{1: -0.03731, 2: 0.00052}, term2Const: 1.0, term2Cos: map[int]float64{1: -0.03731, 2: 0.00052} },
-    // K2: Lunisolar semidiurnal
-    "K2": { term1Sin: map[int]float64{1: -0.3108, 2: -0.0324}, term2Const: 1.0, term2Cos: map[int]float64{1: 0.2852, 2: 0.0324} },
-    // K1: Lunisolar diurnal
-    "K1": { term1Sin: map[int]float64{1: -0.1554, 2: 0.0029}, term2Const: 1.0, term2Cos: map[int]float64{1: 0.1158, 2: -0.0029} },
-    // O1: Principal lunar diurnal
-    "O1": { term1Sin: map[int]float64{1: 0.189, 2: -0.0058}, term2Const: 1.0, term2Cos: map[int]float64{1: 0.189, 2: -0.0058} },
-    // P1: Principal solar diurnal
-    "P1": { term1Sin: map[int]float64{1: -0.0112}, term2Const: 1.0, term2Cos: map[int]float64{1: -0.0112} },
-    // Q1: Lunar elliptical diurnal
-    "Q1": { term1Sin: map[int]float64{1: 0.1886}, term2Const: 1.0, term2Cos: map[int]float64{1: 0.1886} },
+	// M2: Principal lunar semidiurnal
+	"M2": {term1Sin: map[int]float64{1: -0.03731, 2: 0.00052}, term2Const: 1.0, term2Cos: map[int]float64{1: -0.03731, 2: 0.00052}},
+	// S2: Principal solar semidiurnal (very small nodal effect)
+	"S2": {term1Sin: map[int]float64{1: 0.00225}, term2Const: 1.0, term2Cos: map[int]float64{1: 0.00225}},
+	// N2: Lunar elliptical semidiurnal (similar pattern to M2 per provided table)
+	"N2": {term1Sin: map[int]float64{1: -0.03731, 2: 0.00052}, term2Const: 1.0, term2Cos: map[int]float64{1: -0.03731, 2: 0.00052}},
+	// K2: Lunisolar semidiurnal
+	"K2": {term1Sin: map[int]float64{1: -0.3108, 2: -0.0324}, term2Const: 1.0, term2Cos: map[int]float64{1: 0.2852, 2: 0.0324}},
+	// K1: Lunisolar diurnal
+	"K1": {term1Sin: map[int]float64{1: -0.1554, 2: 0.0029}, term2Const: 1.0, term2Cos: map[int]float64{1: 0.1158, 2: -0.0029}},
+	// O1: Principal lunar diurnal
+	"O1": {term1Sin: map[int]float64{1: 0.189, 2: -0.0058}, term2Const: 1.0, term2Cos: map[int]float64{1: 0.189, 2: -0.0058}},
+	// P1: Principal solar diurnal
+	"P1": {term1Sin: map[int]float64{1: -0.0112}, term2Const: 1.0, term2Cos: map[int]float64{1: -0.0112}},
+	// Q1: Lunar elliptical diurnal
+	"Q1": {term1Sin: map[int]float64{1: 0.1886}, term2Const: 1.0, term2Cos: map[int]float64{1: 0.1886}},
 }
 
 // AstronomicalArguments holds the fundamental astronomical arguments.
@@ -193,7 +199,7 @@ func (n *AstronomicalNodalCorrection) getM2Factors(args AstronomicalArguments) (
 }
 
 // getS2Factors returns nodal factors for S2 (principal solar semidiurnal).
-func (n *AstronomicalNodalCorrection) getS2Factors(args AstronomicalArguments) (f, u float64) {
+func (n *AstronomicalNodalCorrection) getS2Factors(_ AstronomicalArguments) (f, u float64) {
 	// S2 has no nodal correction (solar constituent).
 	return 1.0, 0.0
 }
@@ -250,7 +256,7 @@ func (n *AstronomicalNodalCorrection) getO1Factors(args AstronomicalArguments) (
 }
 
 // getP1Factors returns nodal factors for P1 (solar diurnal).
-func (n *AstronomicalNodalCorrection) getP1Factors(args AstronomicalArguments) (f, u float64) {
+func (n *AstronomicalNodalCorrection) getP1Factors(_ AstronomicalArguments) (f, u float64) {
 	// P1 has no nodal correction (solar constituent).
 	return 1.0, 0.0
 }

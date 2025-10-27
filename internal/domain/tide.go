@@ -44,7 +44,9 @@ type PredictionParams struct {
 type PhaseConvention int
 
 const (
+	// PhaseConvFESGreenwich uses Greenwich phase lag with longitude correction.
     PhaseConvFESGreenwich PhaseConvention = iota
+	// PhaseConvVu uses equilibrium argument V + nodal correction u.
     PhaseConvVu
 )
 
