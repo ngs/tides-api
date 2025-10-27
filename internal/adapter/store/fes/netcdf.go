@@ -70,14 +70,41 @@ func NewStore(dataDir string) *Store {
 // LoadForLocation loads constituent parameters for a lat/lon location
 // using bilinear interpolation from FES NetCDF grids.
 func (s *Store) LoadForLocation(lat, lon float64) ([]domain.ConstituentParam, error) {
-	// Get available constituents.
-	constituents, err := s.GetAvailableConstituents()
+	// Load constituents based on location.
+	// Major 8 constituents provide ~95% of tidal signal in deep water.
+	// For shallow water areas, include overtide constituents (M4, M6, MS4, MN4).
+	majorConstituents := []string{"M2", "S2", "N2", "K2", "K1", "O1", "P1", "Q1"}
+
+	// Add shallow water constituents for coastal/shallow areas.
+	// Check if we're in a potentially shallow area (this is a heuristic).
+	// A more sophisticated approach would use bathymetry data.
+	shallowWaterConstituents := []string{"M4", "MS4", "MN4", "S4"}
+
+	// Include shallow water constituents for all requests to maintain accuracy.
+	// Memory: 12 constituents × 2 grids × 8 MB ≈ 192 MB (still reasonable).
+	requestedConstituents := make([]string, 0, len(majorConstituents)+len(shallowWaterConstituents))
+	requestedConstituents = append(requestedConstituents, majorConstituents...)
+	requestedConstituents = append(requestedConstituents, shallowWaterConstituents...)
+
+	// Verify at least some constituents are available.
+	available, err := s.GetAvailableConstituents()
 	if err != nil {
 		return nil, fmt.Errorf("failed to get available constituents: %w", err)
 	}
-
-	if len(constituents) == 0 {
+	if len(available) == 0 {
 		return nil, fmt.Errorf("no FES NetCDF files found in %s", s.dataDir)
+	}
+
+	// Use only constituents that exist in the data directory.
+	constituents := make([]string, 0, len(requestedConstituents))
+	availableMap := make(map[string]bool)
+	for _, c := range available {
+		availableMap[c] = true
+	}
+	for _, c := range requestedConstituents {
+		if availableMap[c] {
+			constituents = append(constituents, c)
+		}
 	}
 
 	// Load and interpolate each constituent.
