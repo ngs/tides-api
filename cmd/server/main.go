@@ -1,3 +1,4 @@
+// Package main provides the tides API HTTP server.
 package main
 
 import (
@@ -48,7 +49,7 @@ func main() {
 
 	// Initialize stores.
 	csvStore := csv.NewConstituentStore(dataDir)
-	fesStore := fes.NewFESStore(fesDir)
+	fesStore := fes.NewStore(fesDir)
 
 	// Cast to interface.
 	var csvLoader store.ConstituentLoader = csvStore

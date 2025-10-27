@@ -1,3 +1,4 @@
+// Package csv provides CSV-based constituent data loading.
 package csv
 
 import (
@@ -27,11 +28,12 @@ func (s *ConstituentStore) LoadForStation(stationID string) ([]domain.Constituen
 	// Construct file path.
 	filename := fmt.Sprintf("%s/mock_%s_constituents.csv", s.dataDir, strings.ToLower(stationID))
 
+	//nolint:gosec // G304: File path constructed from dataDir (config) and stationID (validated).
 	file, err := os.Open(filename)
 	if err != nil {
 		return nil, fmt.Errorf("failed to open CSV file for station %s: %w", stationID, err)
 	}
-	defer file.Close()
+	defer func() { _ = file.Close() }()
 
 	reader := csv.NewReader(file)
 	reader.TrimLeadingSpace = true
@@ -110,7 +112,7 @@ func (s *ConstituentStore) LoadForStation(stationID string) ([]domain.Constituen
 
 // LoadForLocation loads constituent parameters for a lat/lon location.
 // This is a placeholder for FES integration - currently not supported.
-func (s *ConstituentStore) LoadForLocation(lat, lon float64) ([]domain.ConstituentParam, error) {
+func (s *ConstituentStore) LoadForLocation(_ /* lat */, _ /* lon */ float64) ([]domain.ConstituentParam, error) {
 	return nil, fmt.Errorf("CSV store does not support lat/lon queries - use FES store or specify a station_id")
 }
 

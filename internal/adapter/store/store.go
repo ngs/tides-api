@@ -1,3 +1,4 @@
+// Package store defines interfaces for loading tidal constituent data.
 package store
 
 import "go.ngs.io/tides-api/internal/domain"

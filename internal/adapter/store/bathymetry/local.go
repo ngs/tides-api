@@ -1,3 +1,4 @@
+// Package bathymetry provides bathymetry data loading from NetCDF files.
 package bathymetry
 
 import (
@@ -21,9 +22,79 @@ type LocalStore struct {
 	geoidStore *geoid.Store
 
 	// Cached grids (loaded on demand).
-	depthGrid *interp.Grid2D
-	mslGrid   *interp.Grid2D
-	mu        sync.RWMutex
+	depthGrid   *interp.Grid2D
+	depthBounds *gridBounds
+	mslGrid     *interp.Grid2D
+	mslBounds   *gridBounds
+	mu          sync.RWMutex
+}
+
+type gridBounds struct {
+	minLat, maxLat float64
+	minLon, maxLon float64
+	lonWrap360     bool
+}
+
+func (b *gridBounds) contains(lat, lon float64) bool {
+	if b == nil {
+		return false
+	}
+	lonCheck := lon
+	if b.lonWrap360 {
+		lonCheck = normalizeLon360(lonCheck)
+	}
+	return lat >= b.minLat && lat <= b.maxLat && lonCheck >= b.minLon && lonCheck <= b.maxLon
+}
+
+func boundsFromGrid(grid *interp.Grid2D) *gridBounds {
+	if grid == nil || len(grid.X) == 0 || len(grid.Y) == 0 {
+		return nil
+	}
+	wrap := lonAxisRequiresWrap(grid.X)
+	minLon := grid.X[0]
+	maxLon := grid.X[len(grid.X)-1]
+	if minLon > maxLon {
+		minLon, maxLon = maxLon, minLon
+	}
+	minLat := grid.Y[0]
+	maxLat := grid.Y[len(grid.Y)-1]
+	if minLat > maxLat {
+		minLat, maxLat = maxLat, minLat
+	}
+	return &gridBounds{
+		minLat:     minLat,
+		maxLat:     maxLat,
+		minLon:     minLon,
+		maxLon:     maxLon,
+		lonWrap360: wrap,
+	}
+}
+
+func lonAxisRequiresWrap(lons []float64) bool {
+	if len(lons) == 0 {
+		return false
+	}
+	minVal := lons[0]
+	maxVal := lons[len(lons)-1]
+	if minVal > maxVal {
+		minVal, maxVal = maxVal, minVal
+	}
+	return minVal >= 0 && maxVal > 180
+}
+
+func normalizeLon360(lon float64) float64 {
+	lon = math.Mod(lon, 360)
+	if lon < 0 {
+		lon += 360
+	}
+	return lon
+}
+
+func normalizeLonForAxis(lons []float64, lon float64) float64 {
+	if lonAxisRequiresWrap(lons) {
+		return normalizeLon360(lon)
+	}
+	return lon
 }
 
 // NewLocalStore creates a new local file-based bathymetry store.
@@ -41,16 +112,16 @@ func (s *LocalStore) GetMetadata(lat, lon float64) (*domain.LocationMetadata, er
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	// Load MSL grid if not cached.
-	if s.mslGrid == nil && s.mssPath != "" {
+	// Load MSL grid if needed.
+	if s.mssPath != "" && (s.mslGrid == nil || !s.mslBounds.contains(lat, lon)) {
 		if err := s.loadMSSGrid(lat, lon); err != nil {
 			// MSL is optional - log warning but continue.
 			fmt.Fprintf(os.Stderr, "Warning: failed to load MSS grid: %v\n", err)
 		}
 	}
 
-	// Load depth grid if not cached.
-	if s.depthGrid == nil && s.gebcoPath != "" {
+	// Load depth grid if needed.
+	if s.gebcoPath != "" && (s.depthGrid == nil || !s.depthBounds.contains(lat, lon)) {
 		if err := s.loadDepthGrid(lat, lon); err != nil {
 			// Depth is optional - log warning but continue.
 			fmt.Fprintf(os.Stderr, "Warning: failed to load depth grid: %v\n", err)
@@ -69,8 +140,10 @@ func (s *LocalStore) GetMetadata(lat, lon float64) (*domain.LocationMetadata, er
 	}
 
 	// Interpolate MSL.
+	//nolint:nestif // Grid interpolation logic with multiple error paths.
 	if s.mslGrid != nil {
-		msl, err := s.mslGrid.InterpolateAt(lon, lat)
+		lonMSL := normalizeLonForAxis(s.mslGrid.X, lon)
+		msl, err := s.mslGrid.InterpolateAt(lonMSL, lat)
 		if err != nil {
 			// If interpolation fails (e.g., out of bounds), return nil.
 			return nil, nil
@@ -96,11 +169,12 @@ func (s *LocalStore) GetMetadata(lat, lon float64) (*domain.LocationMetadata, er
 	}
 
 	// Interpolate depth.
+	//nolint:nestif // Grid interpolation logic with multiple conditional paths.
 	if s.depthGrid != nil {
-		depth, err := s.depthGrid.InterpolateAt(lon, lat)
-		if err != nil {
-			// If interpolation fails, depth remains nil.
-		} else {
+		lonDepth := normalizeLonForAxis(s.depthGrid.X, lon)
+		depth, err := s.depthGrid.InterpolateAt(lonDepth, lat)
+		// If interpolation fails, depth remains nil.
+		if err == nil {
 			// GEBCO uses negative values for depth below sea level.
 			// Convert to positive depth.
 			if depth < 0 {
@@ -129,6 +203,7 @@ func (s *LocalStore) loadMSSGrid(lat, lon float64) error {
 	}
 
 	s.mslGrid = grid
+	s.mslBounds = boundsFromGrid(grid)
 	return nil
 }
 
@@ -143,6 +218,7 @@ func (s *LocalStore) loadDepthGrid(lat, lon float64) error {
 	}
 
 	s.depthGrid = grid
+	s.depthBounds = boundsFromGrid(grid)
 	return nil
 }
 
@@ -154,13 +230,15 @@ func (s *LocalStore) Close() error {
 // loadNetCDFGridSubset reads a subset of a 2D grid from a NetCDF file.
 // If margin is 0, the entire grid is loaded.
 // If margin > 0, only data within ±margin degrees of (targetLat, targetLon) is loaded.
+//
+//nolint:gocyclo,nestif,gosec // Complex NetCDF loading logic with many cases.
 func loadNetCDFGridSubset(filepath, latVarName, lonVarName, dataVarName string, targetLat, targetLon, margin float64) (*interp.Grid2D, error) {
 	// Open NetCDF file.
 	nc, err := netcdf.OpenFile(filepath, netcdf.NOWRITE)
 	if err != nil {
 		return nil, fmt.Errorf("failed to open NetCDF file: %w", err)
 	}
-	defer nc.Close()
+	defer func() { _ = nc.Close() }()
 
 	// Try multiple variable name patterns.
 	latNames := []string{latVarName, "latitude", "lat", "y"}
@@ -204,11 +282,27 @@ func loadNetCDFGridSubset(filepath, latVarName, lonVarName, dataVarName string, 
 	var subsetLat, subsetLon []float64
 
 	if margin > 0 {
+		adjLon := normalizeLonForAxis(lonData, targetLon)
+		adjLonMinus := normalizeLonForAxis(lonData, targetLon-margin)
+		adjLonPlus := normalizeLonForAxis(lonData, targetLon+margin)
+
 		// Find indices for the subset region.
 		latStartIdx := findNearestIndex(latData, targetLat-margin)
 		latEndIdx := findNearestIndex(latData, targetLat+margin)
-		lonStartIdx := findNearestIndex(lonData, targetLon-margin)
-		lonEndIdx := findNearestIndex(lonData, targetLon+margin)
+		lonStartIdx := findNearestIndex(lonData, adjLonMinus)
+		lonEndIdx := findNearestIndex(lonData, adjLonPlus)
+		if lonStartIdx == lonEndIdx {
+			// Ensure at least one additional column if possible.
+			lonEndIdx = clamp(lonEndIdx+1, 0, len(lonData)-1)
+		}
+		// If adjusted lon fell outside range (e.g., wrapped) ensure target column included.
+		lonTargetIdx := findNearestIndex(lonData, adjLon)
+		if lonTargetIdx < lonStartIdx {
+			lonStartIdx = lonTargetIdx
+		}
+		if lonTargetIdx > lonEndIdx {
+			lonEndIdx = lonTargetIdx
+		}
 
 		// Ensure proper ordering (start <= end).
 		if latStartIdx > latEndIdx {
@@ -424,6 +518,7 @@ func read2DFloat64Var(v netcdf.Var, nRows, nCols int) ([][]float64, error) {
 	// Apply scale_factor if present.
 	scaleAttr := v.Attr("scale_factor")
 	attrLen, err := scaleAttr.Len()
+	//nolint:nestif // NetCDF attribute handling requires nested conditionals.
 	if err == nil && attrLen > 0 {
 		// Scale_factor attribute exists.
 		var scaleVal float64
@@ -473,7 +568,9 @@ func read2DFloat64VarSubset(v netcdf.Var, startRow, startCol, nRows, nCols int) 
 	totalSize := nRows * nCols
 
 	// Prepare start and count arrays for hyperslab reading.
+	//nolint:gosec // G115: Safe int to uint64 conversion for NetCDF indices.
 	start := []uint64{uint64(startRow), uint64(startCol)}
+	//nolint:gosec // G115: Safe int to uint64 conversion for NetCDF dimensions.
 	count := []uint64{uint64(nRows), uint64(nCols)}
 
 	// Read data based on type.
@@ -524,6 +621,7 @@ func read2DFloat64VarSubset(v netcdf.Var, startRow, startCol, nRows, nCols int) 
 	// Apply scale_factor if present.
 	scaleAttr := v.Attr("scale_factor")
 	attrLen, err := scaleAttr.Len()
+	//nolint:nestif // NetCDF attribute handling requires nested conditionals.
 	if err == nil && attrLen > 0 {
 		// Scale_factor attribute exists.
 		var scaleVal float64
@@ -605,13 +703,13 @@ func findNearestIndex(arr []float64, target float64) int {
 	return left
 }
 
-// clamp ensures value is within [min, max] range.
-func clamp(value, min, max int) int {
-	if value < min {
-		return min
+// clamp ensures value is within [minVal, maxVal] range.
+func clamp(value, minVal, maxVal int) int {
+	if value < minVal {
+		return minVal
 	}
-	if value > max {
-		return max
+	if value > maxVal {
+		return maxVal
 	}
 	return value
 }

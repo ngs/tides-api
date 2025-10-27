@@ -68,6 +68,9 @@ make docker-run
 | `interval` | string | No | Time interval (default: 10m) | `10m`, `1h` |
 | `datum` | string | No | Vertical datum (default: MSL) | `MSL`, `LAT` |
 | `source` | string | No | Data source (auto-detect) | `csv`, `fes` |
+| `datum_offset_m` | float | No | Constant vertical offset [m] applied to all predicted heights | `0.768` |
+| `timezone` | string | No | Output timezone for timestamps | `utc`, `jst` |
+| `phase_convention` | string | No | Phase convention (`fes_greenwich` default, or `vu`) | `fes_greenwich`, `vu` |
 
 \* Either `station_id` OR `lat`+`lon` must be provided (mutually exclusive)
 
@@ -212,6 +215,46 @@ curl 'http://localhost:8080/v1/tides/predictions?lat=35.6762&lon=139.6503&start=
 **Documentation:**
 - [FES_SETUP.md](FES_SETUP.md) - Complete FES setup guide
 - [INSTALL.md](INSTALL.md) - Installation instructions for NetCDF library
+
+### JMA Calibration & Station Overrides
+
+For Japanese ports we can now calibrate directly against JMA's published hourly prediction files:
+
+1. Download the annual TXT file for a station from `https://www.data.jma.go.jp/kaiyou/data/db/tide/suisan/txt/<year>/<station>.txt`.
+2. Fit harmonic constituents using the new CLI:
+
+```bash
+# Example: fit Kisarazu (KZ) using the downloaded file
+go run ./cmd/jma-harmonics \
+  -jma_file /path/to/KZ.txt \
+  -station KZ \
+  -name "Kisarazu (KZ)" \
+  -lat 35.38153 -lon 139.867951 \
+  -radius_km 40 \
+  > data/jma_station_overrides.json
+```
+
+3. 一括更新は Go 製ユーティリティで実行できます（TXT を `tmp/jma_txt/{CODE}.txt` に置いた上で）:
+
+```bash
+go run ./cmd/jma-overrides \
+  -stations tmp/jma-stations.json \
+  -txt_dir tmp/jma_txt \
+  -overrides_out data/jma_station_overrides.json \
+  -datum_out data/jma_datum_offsets.json
+```
+
+  `cmd/jma-overrides` は必要なら `tmp/bin/jma-harmonics` を自動ビルドし、全コード分を順次フィットします。
+4. 個別に調整したい場合は `cmd/jma-harmonics` を直接叩いて JSON を追記できます。`data/jma_datum_offsets.json` も同じコマンドで併せて再生成されます。
+
+Environment variables:
+
+| Variable | Default | Purpose |
+|----------|---------|---------|
+| `DATUM_OFFSETS_PATH` | `data/jma_datum_offsets.json` | Custom path for datum offsets |
+| `STATION_OVERRIDES_PATH` | `data/jma_station_overrides.json` | Custom path for constituent overrides |
+
+With the provided Kisarazu overrides the RMSE against JMA's official hourly predictions drops below 5 cm without manual tweaking.
 
 ## Development
 

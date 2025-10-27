@@ -1,3 +1,4 @@
+// Package usecase contains business logic for tide predictions.
 package usecase
 
 import (
@@ -33,6 +34,17 @@ type PredictionRequest struct {
 	// Optional parameters.
 	Datum  string // E.g., "MSL", "LAT", "MLLW" - MVP uses MSL only.
 	Source string // "csv" or "fes" - if empty, auto-detect.
+
+	// Optional vertical datum offset in meters to adjust heights for comparison with external datums
+	// (e.g., JMA's DL/TP). Positive values raise all predicted heights by the given amount.
+	DatumOffsetM *float64
+
+	// Output timezone preference for formatted timestamps in the response.
+	// Supported: "utc" (default), "jst".
+	Timezone string
+
+	// Optional phase convention selector: "fes_greenwich" (default) or "vu".
+	PhaseConvention string
 }
 
 // PredictionResponse contains the tide prediction results.
@@ -130,6 +142,8 @@ func (r *PredictionRequest) Validate() error {
 }
 
 // Execute performs the tide prediction.
+//
+//nolint:gocyclo,nestif // Complex prediction logic with multiple conditional paths.
 func (uc *PredictionUseCase) Execute(req PredictionRequest) (*PredictionResponse, error) {
 	// Validate request.
 	if err := req.Validate(); err != nil {
@@ -181,27 +195,83 @@ func (uc *PredictionUseCase) Execute(req PredictionRequest) (*PredictionResponse
 		msl = metadata.MSL
 	}
 
+	// Apply optional datum offset (e.g., to align with JMA DL/TP).
+	if req.DatumOffsetM != nil {
+		msl += *req.DatumOffsetM
+	} else if req.Lat != nil && req.Lon != nil {
+		// Auto datum offset: attempt to load nearest known offset (e.g., JMA DL/TP) and apply.
+		if off, ok := getAutoDatumOffset(*req.Lat, *req.Lon); ok {
+			msl += off
+		}
+	}
+
+	if req.Lat != nil && req.Lon != nil {
+		constituents = applyStationOverride(*req.Lat, *req.Lon, constituents, &msl)
+	}
+
+	// Set longitude for Greenwich phase correction (only for lat/lon queries).
+	lon := 0.0
+	if req.Lon != nil {
+		lon = *req.Lon
+	}
+
+	// Choose prediction phase convention.
+	var phaseConv domain.PhaseConvention
+	switch req.PhaseConvention {
+	case "vu", "VU":
+		phaseConv = domain.PhaseConvVu
+	default:
+		phaseConv = domain.PhaseConvFESGreenwich
+	}
+
+	// Reference time: use FES epoch for FES source to align phases, else Unix epoch.
+	refTime := time.Unix(0, 0).UTC()
+	if source == sourceFES {
+		// FES2014 phases are commonly referenced to 2012-01-01 00:00:00 UTC.
+		refTime = time.Date(2012, 1, 1, 0, 0, 0, 0, time.UTC)
+	}
+
 	params := domain.PredictionParams{
 		Constituents:    constituents,
 		MSL:             msl,
-		NodalCorrection: &domain.IdentityNodalCorrection{},
-		ReferenceTime:   time.Unix(0, 0).UTC(), // Use Unix epoch as reference.
+		Longitude:       lon,
+		NodalCorrection: domain.NewAstronomicalNodalCorrection(),
+		ReferenceTime:   refTime,
+		PhaseConvention: phaseConv,
 	}
 
-	// Generate predictions.
+	// Generate predictions at requested interval.
 	predictions := domain.GeneratePredictions(req.Start, req.End, req.Interval, params)
 
-	// Find extrema.
-	extrema := domain.FindExtrema(predictions)
+	// Compute extrema on high-resolution (1m) grid for accurate times regardless of interval.
+	preciseInterval := time.Minute
+	if req.Interval < preciseInterval {
+		preciseInterval = req.Interval
+	}
+	precisePredictions := domain.GeneratePredictions(req.Start, req.End, preciseInterval, params)
+	extrema := domain.RefineExtrema(precisePredictions, domain.FindExtrema(precisePredictions))
 
-	// Refine extrema with parabolic interpolation.
-	extrema = domain.RefineExtrema(predictions, extrema)
+	// Choose output timezone.
+	tz := req.Timezone
+	if tz == "" {
+		tz = "utc"
+	}
+	var loc *time.Location
+	var tzLabel string
+	switch tz {
+	case "jst", "JST":
+		loc = time.FixedZone("JST", 9*60*60)
+		tzLabel = "+09:00"
+	default:
+		loc = time.FixedZone("UTC", 0)
+		tzLabel = "+00:00"
+	}
 
 	// Convert to response format.
 	predictionPoints := make([]PredictionPoint, len(predictions))
 	for i, p := range predictions {
 		point := PredictionPoint{
-			Time:    p.Time.UTC().Format(time.RFC3339),
+			Time:    p.Time.In(loc).Format(time.RFC3339),
 			HeightM: roundToDecimal(p.HeightM),
 		}
 
@@ -219,7 +289,7 @@ func (uc *PredictionUseCase) Execute(req PredictionRequest) (*PredictionResponse
 	highPoints := make([]PredictionPoint, len(extrema.Highs))
 	for i, h := range extrema.Highs {
 		point := PredictionPoint{
-			Time:    h.Time.UTC().Format(time.RFC3339),
+			Time:    h.Time.In(loc).Format(time.RFC3339),
 			HeightM: roundToDecimal(h.HeightM),
 		}
 
@@ -236,7 +306,7 @@ func (uc *PredictionUseCase) Execute(req PredictionRequest) (*PredictionResponse
 	lowPoints := make([]PredictionPoint, len(extrema.Lows))
 	for i, l := range extrema.Lows {
 		point := PredictionPoint{
-			Time:    l.Time.UTC().Format(time.RFC3339),
+			Time:    l.Time.In(loc).Format(time.RFC3339),
 			HeightM: roundToDecimal(l.HeightM),
 		}
 
@@ -266,7 +336,7 @@ func (uc *PredictionUseCase) Execute(req PredictionRequest) (*PredictionResponse
 	response := &PredictionResponse{
 		Source:       source,
 		Datum:        datum,
-		Timezone:     "+00:00", // UTC.
+		Timezone:     tzLabel,
 		Constituents: constituentNames,
 		Predictions:  predictionPoints,
 		Extrema: ExtremaResponse{
@@ -299,6 +369,11 @@ func (uc *PredictionUseCase) Execute(req PredictionRequest) (*PredictionResponse
 		response.Meta["attribution"] = "Mock CSV (for dev). Replace with FES later."
 	} else {
 		response.Meta["attribution"] = "FES2014/2022 tidal model"
+	}
+
+	// Record applied datum offset if provided.
+	if req.DatumOffsetM != nil {
+		response.Meta["datum_offset_m"] = fmt.Sprintf("%.3f", *req.DatumOffsetM)
 	}
 
 	return response, nil

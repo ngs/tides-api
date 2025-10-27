@@ -5,7 +5,7 @@ import (
 	"testing"
 )
 
-// TestBilinearInterpolate_CenterPoint tests interpolation at the center of a grid cell
+// TestBilinearInterpolate_CenterPoint tests interpolation at the center of a grid cell.
 func TestBilinearInterpolate_CenterPoint(t *testing.T) {
 	cell := GridCell{
 		X0: 0.0, X1: 2.0,
@@ -28,7 +28,7 @@ func TestBilinearInterpolate_CenterPoint(t *testing.T) {
 	}
 }
 
-// TestBilinearInterpolate_CornerPoints tests that corners return exact values
+// TestBilinearInterpolate_CornerPoints tests that corners return exact values.
 func TestBilinearInterpolate_CornerPoints(t *testing.T) {
 	cell := GridCell{
 		X0: 0.0, X1: 10.0,
@@ -60,7 +60,7 @@ func TestBilinearInterpolate_CornerPoints(t *testing.T) {
 	}
 }
 
-// TestBilinearInterpolate_LinearCase tests a perfectly linear case
+// TestBilinearInterpolate_LinearCase tests a perfectly linear case.
 func TestBilinearInterpolate_LinearCase(t *testing.T) {
 	// Create a grid where values increase linearly in x
 	// V = x (independent of y)
@@ -94,7 +94,7 @@ func TestBilinearInterpolate_LinearCase(t *testing.T) {
 	}
 }
 
-// TestBilinearInterpolate_OutOfBounds tests error handling for out-of-bounds points
+// TestBilinearInterpolate_OutOfBounds tests error handling for out-of-bounds points.
 func TestBilinearInterpolate_OutOfBounds(t *testing.T) {
 	cell := GridCell{
 		X0: 0.0, X1: 10.0,
@@ -121,7 +121,7 @@ func TestBilinearInterpolate_OutOfBounds(t *testing.T) {
 	}
 }
 
-// TestGrid2D_InterpolateAt tests 2D grid interpolation
+// TestGrid2D_InterpolateAt tests 2D grid interpolation.
 func TestGrid2D_InterpolateAt(t *testing.T) {
 	// Create a simple 3x3 grid
 	grid := &Grid2D{
@@ -172,7 +172,7 @@ func TestGrid2D_InterpolateAt(t *testing.T) {
 	}
 }
 
-// TestGrid2D_Validate tests grid validation
+// TestGrid2D_Validate tests grid validation.
 func TestGrid2D_Validate(t *testing.T) {
 	tests := []struct {
 		name    string
