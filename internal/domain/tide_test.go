@@ -6,7 +6,7 @@ import (
 	"time"
 )
 
-// TestCalculateTideHeight_SingleConstituent tests tide calculation with a single constituent
+// TestCalculateTideHeight_SingleConstituent tests tide calculation with a single constituent.
 func TestCalculateTideHeight_SingleConstituent(t *testing.T) {
 	// Use M2 constituent with known parameters
 	// M2 speed: 28.9841042 deg/hr
@@ -59,7 +59,7 @@ func TestCalculateTideHeight_SingleConstituent(t *testing.T) {
 	}
 }
 
-// TestCalculateTideHeight_MultipleConstituents tests with multiple constituents
+// TestCalculateTideHeight_MultipleConstituents tests with multiple constituents.
 func TestCalculateTideHeight_MultipleConstituents(t *testing.T) {
 	refTime := time.Date(2025, 1, 1, 0, 0, 0, 0, time.UTC)
 
@@ -91,7 +91,7 @@ func TestCalculateTideHeight_MultipleConstituents(t *testing.T) {
 	}
 }
 
-// TestFindExtrema tests extrema detection
+// TestFindExtrema tests extrema detection.
 func TestFindExtrema(t *testing.T) {
 	// Create a simple sinusoidal pattern with known extrema
 	refTime := time.Date(2025, 1, 1, 0, 0, 0, 0, time.UTC)
@@ -148,7 +148,7 @@ func TestFindExtrema(t *testing.T) {
 	}
 }
 
-// TestGeneratePredictions tests time series generation
+// TestGeneratePredictions tests time series generation.
 func TestGeneratePredictions(t *testing.T) {
 	start := time.Date(2025, 1, 1, 0, 0, 0, 0, time.UTC)
 	end := time.Date(2025, 1, 1, 2, 0, 0, 0, time.UTC)
@@ -185,7 +185,7 @@ func TestGeneratePredictions(t *testing.T) {
 	}
 }
 
-// TestDeg2Rad tests degree to radian conversion
+// TestDeg2Rad tests degree to radian conversion.
 func TestDeg2Rad(t *testing.T) {
 	tests := []struct {
 		deg      float64

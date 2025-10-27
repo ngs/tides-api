@@ -58,7 +58,7 @@ func (s *Store) loadGrid(targetLat, targetLon float64) error {
 	if err != nil {
 		return fmt.Errorf("failed to open NetCDF file: %w", err)
 	}
-	defer nc.Close()
+	defer func() { _ = nc.Close() }()
 
 	// Try common variable names for geoid grids.
 	latNames := []string{"lat", "latitude", "y"}
@@ -261,7 +261,9 @@ func read2DFloat64VarSubset(v netcdf.Var, startRow, startCol, nRows, nCols int) 
 	totalSize := nRows * nCols
 
 	// Prepare start and count arrays for hyperslab reading.
+	//nolint:gosec // G115: Safe int to uint64 conversion for NetCDF indices.
 	start := []uint64{uint64(startRow), uint64(startCol)}
+	//nolint:gosec // G115: Safe int to uint64 conversion for NetCDF dimensions.
 	count := []uint64{uint64(nRows), uint64(nCols)}
 
 	// Read data based on type.
@@ -312,6 +314,7 @@ func read2DFloat64VarSubset(v netcdf.Var, startRow, startCol, nRows, nCols int) 
 	// Apply scale_factor if present.
 	scaleAttr := v.Attr("scale_factor")
 	attrLen, err := scaleAttr.Len()
+	//nolint:nestif // NetCDF attribute handling requires nested conditionals.
 	if err == nil && attrLen > 0 {
 		var scaleVal float64
 		scaleData := make([]float64, 1)
@@ -367,13 +370,13 @@ func findNearestIndex(arr []float64, target float64) int {
 	return left
 }
 
-// clamp ensures value is within [min, max] range.
-func clamp(value, min, max int) int {
-	if value < min {
-		return min
+// clamp ensures value is within [minVal, maxVal] range.
+func clamp(value, minVal, maxVal int) int {
+	if value < minVal {
+		return minVal
 	}
-	if value > max {
-		return max
+	if value > maxVal {
+		return maxVal
 	}
 	return value
 }

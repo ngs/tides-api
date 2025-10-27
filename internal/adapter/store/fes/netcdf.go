@@ -17,6 +17,10 @@ import (
 	"go.ngs.io/tides-api/internal/domain"
 )
 
+const (
+	amplitudeVarName = "amplitude"
+)
+
 // Store provides access to FES2014/2022 NetCDF tidal constituent data.
 type Store struct {
 	dataDir string
@@ -51,7 +55,7 @@ func DefaultConfig() FileConfig {
 		PhasePattern:     "{constituent}_phase.nc",
 		LatVarName:       "lat",
 		LonVarName:       "lon",
-		AmplitudeVarName: "amplitude",
+		AmplitudeVarName: amplitudeVarName,
 		PhaseVarName:     "phase",
 	}
 }
@@ -308,13 +312,15 @@ func (s *Store) loadConstituent(name string) (*Grid, error) {
 }
 
 // loadNetCDFGrid reads a 2D grid from a NetCDF file.
+//
+//nolint:gocyclo,nestif,gosec // Complex NetCDF loading logic with many variable name patterns.
 func loadNetCDFGrid(filepath, latVarName, lonVarName, dataVarName string) (*interp.Grid2D, error) {
 	// Open NetCDF file.
 	nc, err := netcdf.OpenFile(filepath, netcdf.NOWRITE)
 	if err != nil {
 		return nil, fmt.Errorf("failed to open NetCDF file: %w", err)
 	}
-	defer nc.Close()
+	defer func() { _ = nc.Close() }()
 
 	// Try multiple variable name patterns.
 	latNames := []string{latVarName, "latitude", "lat", "y"}
@@ -481,7 +487,7 @@ func loadNetCDFGrid(filepath, latVarName, lonVarName, dataVarName string) (*inte
 			for j := 0; j < nLon; j++ {
 				re := reVals[i][j]
 				im := imVals[i][j]
-				if strings.Contains(want, "amp") || strings.Contains(want, "ampl") || want == "amplitude" {
+				if strings.Contains(want, "amp") || strings.Contains(want, "ampl") || want == amplitudeVarName {
 					// Amplitude = sqrt(re^2 + im^2)
 					values[i][j] = math.Hypot(re, im)
 				} else {
@@ -496,7 +502,7 @@ func loadNetCDFGrid(filepath, latVarName, lonVarName, dataVarName string) (*inte
 		}
 
 		// Apply cm->m conversion for amplitude from ocean_tide combined files.
-		if (strings.Contains(want, "amp") || want == "amplitude") && strings.Contains(strings.ToLower(filepath), "ocean_tide") {
+		if (strings.Contains(want, "amp") || want == amplitudeVarName) && strings.Contains(strings.ToLower(filepath), "ocean_tide") {
 			for i := range values {
 				for j := range values[i] {
 					values[i][j] /= 100.0
@@ -536,17 +542,19 @@ func loadNetCDFGrid(filepath, latVarName, lonVarName, dataVarName string) (*inte
 	// Read data based on dimension order.
 	var values [][]float64
 
-	if dim0Len == uint64(nLat) && dim1Len == uint64(nLon) {
+	type dimOrder struct{ d0, d1 uint64 }
+	switch (dimOrder{dim0Len, dim1Len}) {
+	case dimOrder{uint64(nLat), uint64(nLon)}:
 		// Data is [lat, lon].
 		values, err = read2DFloat64Var(dataVar, nLat, nLon)
-	} else if dim0Len == uint64(nLon) && dim1Len == uint64(nLat) {
+	case dimOrder{uint64(nLon), uint64(nLat)}:
 		// Data is [lon, lat] - need to transpose.
 		transposed, err := read2DFloat64Var(dataVar, nLon, nLat)
 		if err != nil {
 			return nil, err
 		}
 		values = transpose2D(transposed)
-	} else {
+	default:
 		return nil, fmt.Errorf("dimension mismatch: data is [%d, %d], expected [%d, %d] or [%d, %d]",
 			dim0Len, dim1Len, nLat, nLon, nLon, nLat)
 	}
@@ -568,7 +576,7 @@ func loadNetCDFGrid(filepath, latVarName, lonVarName, dataVarName string) (*inte
 
 	// Unit conversion for amplitude grids: known FES ocean_tide files use centimeters.
 	// If reading from ocean_tide path and variable name indicates amplitude, convert cm->m.
-	if (strings.Contains(strings.ToLower(dataVarName), "amp") || strings.ToLower(dataVarName) == "amplitude") &&
+	if (strings.Contains(strings.ToLower(dataVarName), "amp") || strings.ToLower(dataVarName) == amplitudeVarName) &&
 		strings.Contains(strings.ToLower(filepath), "ocean_tide") {
 		for i := range values {
 			for j := range values[i] {
@@ -673,6 +681,8 @@ func readFloat64Var(v netcdf.Var) ([]float64, error) {
 				out[i] = float64(val)
 			}
 			return out, nil
+		case netcdf.BYTE, netcdf.CHAR, netcdf.UBYTE, netcdf.USHORT, netcdf.UINT, netcdf.INT64, netcdf.UINT64, netcdf.STRING:
+			return nil, fmt.Errorf("unsupported var type: %v", t)
 		default:
 			return nil, fmt.Errorf("unsupported var type: %v", t)
 		}
@@ -684,6 +694,7 @@ func readFloat64Var(v netcdf.Var) ([]float64, error) {
 func read2DFloat64Var(v netcdf.Var, nRows, nCols int) ([][]float64, error) {
 	total := nRows * nCols
 	var flat []float64
+	//nolint:nestif // Type checking for NetCDF variable requires nested switch.
 	if t, err := v.Type(); err == nil {
 		switch t {
 		case netcdf.DOUBLE:
@@ -718,6 +729,8 @@ func read2DFloat64Var(v netcdf.Var, nRows, nCols int) ([][]float64, error) {
 			for i, val := range tmp {
 				flat[i] = float64(val)
 			}
+		case netcdf.BYTE, netcdf.CHAR, netcdf.UBYTE, netcdf.USHORT, netcdf.UINT, netcdf.INT64, netcdf.UINT64, netcdf.STRING:
+			return nil, fmt.Errorf("unsupported data type: %v", t)
 		default:
 			return nil, fmt.Errorf("unsupported data type: %v", t)
 		}

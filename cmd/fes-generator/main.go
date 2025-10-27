@@ -1,3 +1,4 @@
+// Package main provides a tool to generate FES NetCDF files from CSV constituent data.
 package main
 
 import (
@@ -88,6 +89,7 @@ func main() {
 		grid.LatMin, grid.LatMax, grid.LonMin, grid.LonMax, grid.Resolution)
 
 	// Create output directory.
+	//nolint:gosec // G301: Standard directory permissions for data output.
 	if err := os.MkdirAll(*outDir, 0o755); err != nil {
 		log.Fatalf("Failed to create output directory: %v", err)
 	}
@@ -119,11 +121,12 @@ func main() {
 
 // readConstituentCSV reads constituent data from CSV file.
 func readConstituentCSV(path string) ([]ConstituentData, error) {
+	//nolint:gosec // G304: File path from command-line argument, user-controlled.
 	file, err := os.Open(path)
 	if err != nil {
 		return nil, err
 	}
-	defer file.Close()
+	defer func() { _ = file.Close() }()
 
 	reader := csv.NewReader(file)
 	reader.TrimLeadingSpace = true
@@ -251,14 +254,16 @@ func writeNetCDF(path string, lat, lon, data []float64, nLat, nLon int, varName 
 	if err != nil {
 		return fmt.Errorf("failed to create file: %w", err)
 	}
-	defer ds.Close()
+	defer func() { _ = ds.Close() }()
 
 	// Create dimensions.
+	//nolint:gosec // G115: Safe int to uint64 conversion for grid dimensions.
 	latDim, err := ds.AddDim("lat", uint64(nLat))
 	if err != nil {
 		return err
 	}
 
+	//nolint:gosec // G115: Safe int to uint64 conversion for grid dimensions.
 	lonDim, err := ds.AddDim("lon", uint64(nLon))
 	if err != nil {
 		return err

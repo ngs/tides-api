@@ -1,3 +1,4 @@
+// Package http provides HTTP handlers for the tides API.
 package http
 
 import (
@@ -71,6 +72,7 @@ func (h *Handler) GetPredictions(c *gin.Context) {
 	}
 
     // Parse time range. If missing and lat/lon provided, default to local (resolved) current day 00:00-24:00.
+    //nolint:nestif // Time range parsing with multiple default scenarios.
     if startStr == "" && endStr == "" && req.Lat != nil && req.Lon != nil {
         // Resolve simple timezone: JST for Japan bounding box, otherwise UTC.
         loc, tzCode := resolveTimezoneForLatLon(*req.Lat, *req.Lon)

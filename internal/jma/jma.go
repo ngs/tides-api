@@ -1,3 +1,4 @@
+// Package jma provides parsing and loading of JMA (Japan Meteorological Agency) tide data.
 package jma
 
 import (
@@ -14,6 +15,8 @@ import (
 )
 
 // JSTLocation is a fixed +09:00 zone used by JMA hourly records.
+//
+//nolint:gochecknoglobals // Intentional: Shared timezone constant.
 var JSTLocation = time.FixedZone("JST", 9*60*60)
 
 // HourlyRecord represents a single day of 24 hourly heights in meters.
@@ -126,12 +129,13 @@ func loadBytes(path string) ([]byte, error) {
 		if err != nil {
 			return nil, err
 		}
-		defer resp.Body.Close()
+		defer func() { _ = resp.Body.Close() }()
 		if resp.StatusCode != http.StatusOK {
 			body, _ := io.ReadAll(resp.Body)
 			return nil, fmt.Errorf("HTTP %d: %s", resp.StatusCode, string(body))
 		}
 		return io.ReadAll(resp.Body)
 	}
+	//nolint:gosec // G304: File path from caller for JMA data files.
 	return os.ReadFile(path)
 }

@@ -9,8 +9,10 @@ import (
 )
 
 // createBaseNC is a helper to create a minimal NetCDF with common setup.
+// It does NOT call EndDef - that must be done by the caller after adding all variables.
 func createBaseNC(t *testing.T, path string) (f netcdf.Dataset, latDim netcdf.Dim, lonDim netcdf.Dim) {
 	t.Helper()
+	//nolint:gosec // G301: Standard test directory permissions.
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		t.Fatalf("mkdir: %v", err)
 	}
@@ -22,78 +24,129 @@ func createBaseNC(t *testing.T, path string) (f netcdf.Dataset, latDim netcdf.Di
 
 	latDim, _ = f.AddDim("lat", 2)
 	lonDim, _ = f.AddDim("lon", 2)
-	vlat, _ := f.AddVar("lat", netcdf.DOUBLE, []netcdf.Dim{latDim})
-	vlon, _ := f.AddVar("lon", netcdf.DOUBLE, []netcdf.Dim{lonDim})
+	_, _ = f.AddVar("lat", netcdf.DOUBLE, []netcdf.Dim{latDim})
+	_, _ = f.AddVar("lon", netcdf.DOUBLE, []netcdf.Dim{lonDim})
 
-	if err := f.EndDef(); err != nil {
-		f.Close()
-		t.Fatalf("enddef: %v", err)
-	}
-
-	if err := vlat.WriteFloat64s([]float64{35.0, 36.0}); err != nil {
-		f.Close()
-		t.Fatalf("write lat: %v", err)
-	}
-	if err := vlon.WriteFloat64s([]float64{139.0, 140.0}); err != nil {
-		f.Close()
-		t.Fatalf("write lon: %v", err)
-	}
 	return f, latDim, lonDim
 }
 
-func write2DVar(t *testing.T, f netcdf.Dataset, varName string, latDim, lonDim netcdf.Dim, values [][]float32) {
+func add2DVar(t *testing.T, f netcdf.Dataset, varName string, latDim, lonDim netcdf.Dim) netcdf.Var {
 	t.Helper()
-	v, _ := f.AddVar(varName, netcdf.FLOAT, []netcdf.Dim{latDim, lonDim})
+	v, err := f.AddVar(varName, netcdf.FLOAT, []netcdf.Dim{latDim, lonDim})
+	if err != nil {
+		t.Fatalf("add var %s: %v", varName, err)
+	}
+	return v
+}
+
+func write2DVar(t *testing.T, v netcdf.Var, varName string, values [][]float32) {
+	t.Helper()
 	flat := []float32{values[0][0], values[0][1], values[1][0], values[1][1]}
 	if err := v.WriteFloat32s(flat); err != nil {
 		t.Fatalf("write %s: %v", varName, err)
 	}
 }
 
+// finalizeTwoVarNC completes a NetCDF file with two 2D variables by calling EndDef and writing lat/lon coordinates.
+func finalizeTwoVarNC(t *testing.T, f netcdf.Dataset, v1, v2 netcdf.Var, v1Name string, v1Data [][]float32, v2Name string, v2Data [][]float32) {
+	t.Helper()
+	if err := f.EndDef(); err != nil {
+		t.Fatalf("enddef: %v", err)
+	}
+
+	vlat, _ := f.Var("lat")
+	vlon, _ := f.Var("lon")
+	if err := vlat.WriteFloat64s([]float64{35.0, 36.0}); err != nil {
+		t.Fatalf("write lat: %v", err)
+	}
+	if err := vlon.WriteFloat64s([]float64{139.0, 140.0}); err != nil {
+		t.Fatalf("write lon: %v", err)
+	}
+
+	write2DVar(t, v1, v1Name, v1Data)
+	write2DVar(t, v2, v2Name, v2Data)
+}
+
 // createCombinedAmpPhaseNC creates a minimal combined NetCDF with lat, lon, amplitude, phase (2x2).
 func createCombinedAmpPhaseNC(t *testing.T, path string, amp [][]float32, phase [][]float32) {
 	t.Helper()
 	f, latDim, lonDim := createBaseNC(t, path)
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 
-	write2DVar(t, f, "amplitude", latDim, lonDim, amp)
-	write2DVar(t, f, "phase", latDim, lonDim, phase)
+	vAmp := add2DVar(t, f, "amplitude", latDim, lonDim)
+	vPhase := add2DVar(t, f, "phase", latDim, lonDim)
+
+	finalizeTwoVarNC(t, f, vAmp, vPhase, "amplitude", amp, "phase", phase)
 }
 
 func createAmpOnlyNC(t *testing.T, path string, values [][]float32) {
 	t.Helper()
 	f, latDim, lonDim := createBaseNC(t, path)
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 
-	write2DVar(t, f, "amplitude", latDim, lonDim, values)
+	vAmp := add2DVar(t, f, "amplitude", latDim, lonDim)
+
+	if err := f.EndDef(); err != nil {
+		t.Fatalf("enddef: %v", err)
+	}
+
+	vlat, _ := f.Var("lat")
+	vlon, _ := f.Var("lon")
+	if err := vlat.WriteFloat64s([]float64{35.0, 36.0}); err != nil {
+		t.Fatalf("write lat: %v", err)
+	}
+	if err := vlon.WriteFloat64s([]float64{139.0, 140.0}); err != nil {
+		t.Fatalf("write lon: %v", err)
+	}
+
+	write2DVar(t, vAmp, "amplitude", values)
 }
 
 func createPhaseOnlyNC(t *testing.T, path string, values [][]float32) {
 	t.Helper()
 	f, latDim, lonDim := createBaseNC(t, path)
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 
-	write2DVar(t, f, "phase", latDim, lonDim, values)
+	vPhase := add2DVar(t, f, "phase", latDim, lonDim)
+
+	if err := f.EndDef(); err != nil {
+		t.Fatalf("enddef: %v", err)
+	}
+
+	vlat, _ := f.Var("lat")
+	vlon, _ := f.Var("lon")
+	if err := vlat.WriteFloat64s([]float64{35.0, 36.0}); err != nil {
+		t.Fatalf("write lat: %v", err)
+	}
+	if err := vlon.WriteFloat64s([]float64{139.0, 140.0}); err != nil {
+		t.Fatalf("write lon: %v", err)
+	}
+
+	write2DVar(t, vPhase, "phase", values)
 }
 
 // createCombinedReImNC creates a minimal combined NetCDF with lat, lon, hRe, hIm (2x2).
 func createCombinedReImNC(t *testing.T, path string, re [][]float32, im [][]float32) {
 	t.Helper()
 	f, latDim, lonDim := createBaseNC(t, path)
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 
-	write2DVar(t, f, "hRe", latDim, lonDim, re)
-	write2DVar(t, f, "hIm", latDim, lonDim, im)
+	vRe := add2DVar(t, f, "hRe", latDim, lonDim)
+	vIm := add2DVar(t, f, "hIm", latDim, lonDim)
+
+	finalizeTwoVarNC(t, f, vRe, vIm, "hRe", re, "hIm", im)
 }
 
 func TestGetAvailableConstituents_RecursiveDetectsShallow(t *testing.T) {
 	dir := t.TempDir()
 	// Create empty files to test name-based detection recursively
+	//nolint:gosec // G301: Standard test directory permissions.
 	if err := os.MkdirAll(filepath.Join(dir, "ocean_tide"), 0o755); err != nil {
 		t.Fatal(err)
 	}
 	for _, name := range []string{"m2_amplitude.nc", "ocean_tide/m4.nc", "ocean_tide/ms4.nc"} {
 		p := filepath.Join(dir, name)
+		//nolint:gosec // G306: Test file with standard permissions.
 		if err := os.WriteFile(p, []byte{}, 0o644); err != nil {
 			t.Fatalf("write %s: %v", name, err)
 		}

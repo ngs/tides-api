@@ -1,3 +1,4 @@
+// Package main provides the tides API HTTP server.
 package main
 
 import (

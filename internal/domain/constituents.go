@@ -1,3 +1,4 @@
+// Package domain defines core tidal prediction domain models and algorithms.
 package domain
 
 import "math"
@@ -18,6 +19,8 @@ type ConstituentParam struct {
 
 // StandardConstituents contains tidal constituents with their angular speeds (deg/hour).
 // Reference: https://www.pmel.noaa.gov/pubs/PDF/park2589/park2589.pdf
+//
+//nolint:gochecknoglobals // Intentional: Read-only constant map.
 var StandardConstituents = map[string]float64{
 	// Principal lunar semidiurnal.
 	"M2": 28.9841042,

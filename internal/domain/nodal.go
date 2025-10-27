@@ -23,6 +23,7 @@ func (n *AstronomicalNodalCorrection) GetFactors(constituent string, t float64) 
 	args := n.calculateAstronomicalArguments(t)
 
 	// Use external coefficients if available (Fourier series in N).
+	//nolint:nestif // Nodal correction logic with fallback handling.
 	if n.coeffs != nil {
 		if c, ok := n.coeffs.ByName[constituent]; ok {
 			N := args.N
@@ -102,6 +103,8 @@ type nonlinearCoeff struct {
 }
 
 // Built-in coefficients for major constituents (pyTMD-derived; N in radians).
+//
+//nolint:gochecknoglobals // Intentional: Read-only constant map for nodal corrections.
 var builtInNonlinearCoeffs = map[string]nonlinearCoeff{
 	// M2: Principal lunar semidiurnal
 	"M2": {term1Sin: map[int]float64{1: -0.03731, 2: 0.00052}, term2Const: 1.0, term2Cos: map[int]float64{1: -0.03731, 2: 0.00052}},

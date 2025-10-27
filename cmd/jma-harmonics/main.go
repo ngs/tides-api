@@ -1,3 +1,4 @@
+// Package main fits harmonic constituents to JMA tide station observation data.
 package main
 
 import (

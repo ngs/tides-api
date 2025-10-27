@@ -142,6 +142,8 @@ func (r *PredictionRequest) Validate() error {
 }
 
 // Execute performs the tide prediction.
+//
+//nolint:gocyclo,nestif // Complex prediction logic with multiple conditional paths.
 func (uc *PredictionUseCase) Execute(req PredictionRequest) (*PredictionResponse, error) {
 	// Validate request.
 	if err := req.Validate(); err != nil {

@@ -11,6 +11,7 @@ import (
 // Helper to create a minimal GEBCO-like NetCDF file with the given elevation data.
 func createElevationTestFile(t *testing.T, path string, latVals, lonVals []float64, values [][]float32) {
 	t.Helper()
+	//nolint:gosec // G301: Standard test directory permissions.
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		t.Fatalf("mkdir: %v", err)
 	}
@@ -18,7 +19,7 @@ func createElevationTestFile(t *testing.T, path string, latVals, lonVals []float
 	if err != nil {
 		t.Fatalf("create nc: %v", err)
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 
 	latDim, _ := f.AddDim("lat", uint64(len(latVals)))
 	lonDim, _ := f.AddDim("lon", uint64(len(lonVals)))

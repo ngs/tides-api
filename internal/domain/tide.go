@@ -77,6 +77,10 @@ func CalculateTideHeight(t time.Time, params PredictionParams) float64 {
             // FES Greenwich phase lag φ with geographic longitude correction.
             // h(t) = f A cos(ωΔt - φ + λ + u)
             phaseAngleDeg = c.SpeedDegPerHr*deltaHours - c.PhaseDeg + params.Longitude + u
+        case PhaseConvVu:
+            // Use equilibrium argument V + u (if provided by nodal correction). Avoid longitude.
+            v := params.NodalCorrection.GetEquilibriumArgument(c.Name, deltaHours)
+            phaseAngleDeg = c.SpeedDegPerHr*deltaHours + v + u - c.PhaseDeg
         default:
             // Use equilibrium argument V + u (if provided by nodal correction). Avoid longitude.
             v := params.NodalCorrection.GetEquilibriumArgument(c.Name, deltaHours)

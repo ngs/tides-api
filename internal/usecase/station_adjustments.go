@@ -18,6 +18,7 @@ type datumOffsetEntry struct {
 	OffsetM float64 `json:"offset_m"`
 }
 
+//nolint:gochecknoglobals // Intentional: sync.Once pattern for lazy loading.
 var (
 	datumOnce  sync.Once
 	datumTable []datumOffsetEntry
@@ -29,6 +30,7 @@ func getAutoDatumOffset(lat, lon float64) (float64, bool) {
 		if path == "" {
 			path = "data/jma_datum_offsets.json"
 		}
+		//nolint:gosec // G304: File path from env var or config path.
 		if b, err := os.ReadFile(path); err == nil {
 			var entries []datumOffsetEntry
 			if err := json.Unmarshal(b, &entries); err == nil {
@@ -72,6 +74,7 @@ type stationOverrideEntry struct {
 	Constituents []overrideConstituent `json:"constituents"`
 }
 
+//nolint:gochecknoglobals // Intentional: sync.Once pattern for lazy loading.
 var (
 	overridesOnce  sync.Once
 	overridesTable []stationOverrideEntry
@@ -82,6 +85,7 @@ func loadOverrides() {
 	if path == "" {
 		path = "data/jma_station_overrides.json"
 	}
+	//nolint:gosec // G304: File path from env var or config path.
 	if b, err := os.ReadFile(path); err == nil {
 		var entries []stationOverrideEntry
 		if err := json.Unmarshal(b, &entries); err == nil {

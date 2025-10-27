@@ -1,3 +1,4 @@
+// Package interp provides bilinear interpolation for 2D grids.
 package interp
 
 import (

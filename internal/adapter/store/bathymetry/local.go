@@ -1,3 +1,4 @@
+// Package bathymetry provides bathymetry data loading from NetCDF files.
 package bathymetry
 
 import (
@@ -73,12 +74,12 @@ func lonAxisRequiresWrap(lons []float64) bool {
 	if len(lons) == 0 {
 		return false
 	}
-	min := lons[0]
-	max := lons[len(lons)-1]
-	if min > max {
-		min, max = max, min
+	minVal := lons[0]
+	maxVal := lons[len(lons)-1]
+	if minVal > maxVal {
+		minVal, maxVal = maxVal, minVal
 	}
-	return min >= 0 && max > 180
+	return minVal >= 0 && maxVal > 180
 }
 
 func normalizeLon360(lon float64) float64 {
@@ -139,6 +140,7 @@ func (s *LocalStore) GetMetadata(lat, lon float64) (*domain.LocationMetadata, er
 	}
 
 	// Interpolate MSL.
+	//nolint:nestif // Grid interpolation logic with multiple error paths.
 	if s.mslGrid != nil {
 		lonMSL := normalizeLonForAxis(s.mslGrid.X, lon)
 		msl, err := s.mslGrid.InterpolateAt(lonMSL, lat)
@@ -167,12 +169,12 @@ func (s *LocalStore) GetMetadata(lat, lon float64) (*domain.LocationMetadata, er
 	}
 
 	// Interpolate depth.
+	//nolint:nestif // Grid interpolation logic with multiple conditional paths.
 	if s.depthGrid != nil {
 		lonDepth := normalizeLonForAxis(s.depthGrid.X, lon)
 		depth, err := s.depthGrid.InterpolateAt(lonDepth, lat)
-		if err != nil {
-			// If interpolation fails, depth remains nil.
-		} else {
+		// If interpolation fails, depth remains nil.
+		if err == nil {
 			// GEBCO uses negative values for depth below sea level.
 			// Convert to positive depth.
 			if depth < 0 {
@@ -228,13 +230,15 @@ func (s *LocalStore) Close() error {
 // loadNetCDFGridSubset reads a subset of a 2D grid from a NetCDF file.
 // If margin is 0, the entire grid is loaded.
 // If margin > 0, only data within ±margin degrees of (targetLat, targetLon) is loaded.
+//
+//nolint:gocyclo,nestif,gosec // Complex NetCDF loading logic with many cases.
 func loadNetCDFGridSubset(filepath, latVarName, lonVarName, dataVarName string, targetLat, targetLon, margin float64) (*interp.Grid2D, error) {
 	// Open NetCDF file.
 	nc, err := netcdf.OpenFile(filepath, netcdf.NOWRITE)
 	if err != nil {
 		return nil, fmt.Errorf("failed to open NetCDF file: %w", err)
 	}
-	defer nc.Close()
+	defer func() { _ = nc.Close() }()
 
 	// Try multiple variable name patterns.
 	latNames := []string{latVarName, "latitude", "lat", "y"}
@@ -514,6 +518,7 @@ func read2DFloat64Var(v netcdf.Var, nRows, nCols int) ([][]float64, error) {
 	// Apply scale_factor if present.
 	scaleAttr := v.Attr("scale_factor")
 	attrLen, err := scaleAttr.Len()
+	//nolint:nestif // NetCDF attribute handling requires nested conditionals.
 	if err == nil && attrLen > 0 {
 		// Scale_factor attribute exists.
 		var scaleVal float64
@@ -563,7 +568,9 @@ func read2DFloat64VarSubset(v netcdf.Var, startRow, startCol, nRows, nCols int) 
 	totalSize := nRows * nCols
 
 	// Prepare start and count arrays for hyperslab reading.
+	//nolint:gosec // G115: Safe int to uint64 conversion for NetCDF indices.
 	start := []uint64{uint64(startRow), uint64(startCol)}
+	//nolint:gosec // G115: Safe int to uint64 conversion for NetCDF dimensions.
 	count := []uint64{uint64(nRows), uint64(nCols)}
 
 	// Read data based on type.
@@ -614,6 +621,7 @@ func read2DFloat64VarSubset(v netcdf.Var, startRow, startCol, nRows, nCols int) 
 	// Apply scale_factor if present.
 	scaleAttr := v.Attr("scale_factor")
 	attrLen, err := scaleAttr.Len()
+	//nolint:nestif // NetCDF attribute handling requires nested conditionals.
 	if err == nil && attrLen > 0 {
 		// Scale_factor attribute exists.
 		var scaleVal float64
@@ -695,13 +703,13 @@ func findNearestIndex(arr []float64, target float64) int {
 	return left
 }
 
-// clamp ensures value is within [min, max] range.
-func clamp(value, min, max int) int {
-	if value < min {
-		return min
+// clamp ensures value is within [minVal, maxVal] range.
+func clamp(value, minVal, maxVal int) int {
+	if value < minVal {
+		return minVal
 	}
-	if value > max {
-		return max
+	if value > maxVal {
+		return maxVal
 	}
 	return value
 }

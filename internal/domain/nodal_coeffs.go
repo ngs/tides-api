@@ -10,8 +10,8 @@ import (
 
 // NodalCoeff holds Fourier series coefficients in N (degrees) for f and u,
 // and an optional constant V0 (degrees) for the equilibrium argument.
-// f(N) = F0 + sum_k FCos[k]*cos(kN) + sum_k FSin[k]*sin(kN)
-// u(N) = U0 + sum_k UCos[k]*cos(kN) + sum_k USin[k]*sin(kN)
+// f(N) = F0 + sum_k FCos[k]*cos(kN) + sum_k FSin[k]*sin(kN).
+// u(N) = U0 + sum_k UCos[k]*cos(kN) + sum_k USin[k]*sin(kN).
 type NodalCoeff struct {
 	Name string  `json:"name"`
 	F0   float64 `json:"f0"`
@@ -27,15 +27,15 @@ type NodalCoeff struct {
 }
 
 // EvalF evaluates the nodal amplitude factor f at a given lunar node angle N (degrees).
-func (c *NodalCoeff) EvalF(Ndeg float64) float64 {
+func (c *NodalCoeff) EvalF(ndeg float64) float64 {
 	f := c.F0
 	for k, a := range c.FCos {
 		ki, _ := strconv.Atoi(k)
-		f += a * mathCos(Deg2Rad(float64(ki)*Ndeg))
+		f += a * mathCos(Deg2Rad(float64(ki)*ndeg))
 	}
 	for k, b := range c.FSin {
 		ki, _ := strconv.Atoi(k)
-		f += b * mathSin(Deg2Rad(float64(ki)*Ndeg))
+		f += b * mathSin(Deg2Rad(float64(ki)*ndeg))
 	}
 	if f == 0 {
 		f = 1
@@ -44,34 +44,34 @@ func (c *NodalCoeff) EvalF(Ndeg float64) float64 {
 }
 
 // EvalU evaluates the nodal phase correction u at a given lunar node angle N (degrees).
-func (c *NodalCoeff) EvalU(Ndeg float64) float64 {
+func (c *NodalCoeff) EvalU(ndeg float64) float64 {
 	u := c.U0
 	for k, a := range c.UCos {
 		ki, _ := strconv.Atoi(k)
-		u += a * mathCos(Deg2Rad(float64(ki)*Ndeg))
+		u += a * mathCos(Deg2Rad(float64(ki)*ndeg))
 	}
 	for k, b := range c.USin {
 		ki, _ := strconv.Atoi(k)
-		u += b * mathSin(Deg2Rad(float64(ki)*Ndeg))
+		u += b * mathSin(Deg2Rad(float64(ki)*ndeg))
 	}
 	return u
 }
 
 // EvalNonlinear evaluates the nonlinear (sqrt/atan2) specification if present.
-func (c *NodalCoeff) EvalNonlinear(Ndeg float64) (float64, float64, bool) {
+func (c *NodalCoeff) EvalNonlinear(ndeg float64) (float64, float64, bool) {
 	if c.Nonlinear == nil {
 		return 0, 0, false
 	}
-	Nrad := Deg2Rad(Ndeg)
+	nrad := Deg2Rad(ndeg)
 	term1 := 0.0
 	for k, coeff := range c.Nonlinear.Term1Sin {
 		ki, _ := strconv.Atoi(k)
-		term1 += coeff * mathSin(float64(ki)*Nrad)
+		term1 += coeff * mathSin(float64(ki)*nrad)
 	}
 	term2 := c.Nonlinear.Term2Const
 	for k, coeff := range c.Nonlinear.Term2Cos {
 		ki, _ := strconv.Atoi(k)
-		term2 += coeff * mathCos(float64(ki)*Nrad)
+		term2 += coeff * mathCos(float64(ki)*nrad)
 	}
 	f := math.Sqrt(term1*term1 + term2*term2)
 	u := Rad2Deg(math.Atan2(term1, term2))
@@ -93,6 +93,7 @@ type NodalCoeffSet struct {
 
 // LoadNodalCoeffSet loads nodal coefficients from a JSON file.
 func LoadNodalCoeffSet(path string) (*NodalCoeffSet, error) {
+	//nolint:gosec // G304: File path from caller, typically config-controlled.
 	b, err := os.ReadFile(path)
 	if err != nil {
 		return nil, err

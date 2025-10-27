@@ -1,7 +1,9 @@
+// Package main generates station override files for JMA tide stations.
 package main
 
 import (
 	"bufio"
+	"context"
 	"encoding/json"
 	"flag"
 	"fmt"
@@ -120,11 +122,12 @@ func main() {
 }
 
 func loadStations(path string) ([]stationEntry, error) {
+	//nolint:gosec // G304: File path from command-line argument, user-controlled.
 	f, err := os.Open(path)
 	if err != nil {
 		return nil, err
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 
 	var entries []stationEntry
 	dec := json.NewDecoder(bufio.NewReader(f))
@@ -138,10 +141,11 @@ func ensureHarmonicsBinary(binPath string) error {
 	if _, err := os.Stat(binPath); err == nil {
 		return nil
 	}
+	//nolint:gosec // G301: Standard directory permissions for build output.
 	if err := os.MkdirAll(filepath.Dir(binPath), 0o755); err != nil {
 		return err
 	}
-	cmd := exec.Command("go", "build", "-o", binPath, "./cmd/jma-harmonics")
+	cmd := exec.CommandContext(context.Background(), "go", "build", "-o", binPath, "./cmd/jma-harmonics")
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 	return cmd.Run()
@@ -157,7 +161,8 @@ func runHarmonics(binPath, txtPath, code string, lat, lon, radius float64) (over
 		fmt.Sprintf("-lon=%f", lon),
 		fmt.Sprintf("-radius_km=%f", radius),
 	}
-	cmd := exec.Command(args[0], args[1:]...)
+	//nolint:gosec // G204: args[0] is known binary path, args from controlled source.
+	cmd := exec.CommandContext(context.Background(), args[0], args[1:]...)
 	var stdout, stderr strings.Builder
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
@@ -237,14 +242,16 @@ func stationKey(o overrideResult) string {
 }
 
 func writeJSON(path string, data any) error {
+	//nolint:gosec // G301: Standard directory permissions for data output.
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return err
 	}
+	//nolint:gosec // G304: File path from function parameter, controlled by caller.
 	f, err := os.Create(path)
 	if err != nil {
 		return err
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 	enc := json.NewEncoder(f)
 	enc.SetIndent("", "  ")
 	return enc.Encode(data)
