@@ -102,26 +102,38 @@ type nonlinearCoeff struct {
 	term2Cos   map[int]float64 // b_k for cos(kN)
 }
 
+// Shared coefficients for constituents with identical sin/cos terms.
+//
+//nolint:gochecknoglobals // Intentional: Read-only constant maps for nodal corrections.
+var (
+	m2SinCosCoeffs = map[int]float64{1: -0.03731, 2: 0.00052}
+	s2SinCosCoeffs = map[int]float64{1: 0.00225}
+	n2SinCosCoeffs = map[int]float64{1: -0.03731, 2: 0.00052}
+	o1SinCosCoeffs = map[int]float64{1: 0.189, 2: -0.0058}
+	p1SinCosCoeffs = map[int]float64{1: -0.0112}
+	q1SinCosCoeffs = map[int]float64{1: 0.1886}
+)
+
 // Built-in coefficients for major constituents (pyTMD-derived; N in radians).
 //
 //nolint:gochecknoglobals // Intentional: Read-only constant map for nodal corrections.
 var builtInNonlinearCoeffs = map[string]nonlinearCoeff{
 	// M2: Principal lunar semidiurnal
-	"M2": {term1Sin: map[int]float64{1: -0.03731, 2: 0.00052}, term2Const: 1.0, term2Cos: map[int]float64{1: -0.03731, 2: 0.00052}},
+	"M2": {term1Sin: m2SinCosCoeffs, term2Const: 1.0, term2Cos: m2SinCosCoeffs},
 	// S2: Principal solar semidiurnal (very small nodal effect)
-	"S2": {term1Sin: map[int]float64{1: 0.00225}, term2Const: 1.0, term2Cos: map[int]float64{1: 0.00225}},
+	"S2": {term1Sin: s2SinCosCoeffs, term2Const: 1.0, term2Cos: s2SinCosCoeffs},
 	// N2: Lunar elliptical semidiurnal (similar pattern to M2 per provided table)
-	"N2": {term1Sin: map[int]float64{1: -0.03731, 2: 0.00052}, term2Const: 1.0, term2Cos: map[int]float64{1: -0.03731, 2: 0.00052}},
+	"N2": {term1Sin: n2SinCosCoeffs, term2Const: 1.0, term2Cos: n2SinCosCoeffs},
 	// K2: Lunisolar semidiurnal
 	"K2": {term1Sin: map[int]float64{1: -0.3108, 2: -0.0324}, term2Const: 1.0, term2Cos: map[int]float64{1: 0.2852, 2: 0.0324}},
 	// K1: Lunisolar diurnal
 	"K1": {term1Sin: map[int]float64{1: -0.1554, 2: 0.0029}, term2Const: 1.0, term2Cos: map[int]float64{1: 0.1158, 2: -0.0029}},
 	// O1: Principal lunar diurnal
-	"O1": {term1Sin: map[int]float64{1: 0.189, 2: -0.0058}, term2Const: 1.0, term2Cos: map[int]float64{1: 0.189, 2: -0.0058}},
+	"O1": {term1Sin: o1SinCosCoeffs, term2Const: 1.0, term2Cos: o1SinCosCoeffs},
 	// P1: Principal solar diurnal
-	"P1": {term1Sin: map[int]float64{1: -0.0112}, term2Const: 1.0, term2Cos: map[int]float64{1: -0.0112}},
+	"P1": {term1Sin: p1SinCosCoeffs, term2Const: 1.0, term2Cos: p1SinCosCoeffs},
 	// Q1: Lunar elliptical diurnal
-	"Q1": {term1Sin: map[int]float64{1: 0.1886}, term2Const: 1.0, term2Cos: map[int]float64{1: 0.1886}},
+	"Q1": {term1Sin: q1SinCosCoeffs, term2Const: 1.0, term2Cos: q1SinCosCoeffs},
 }
 
 // AstronomicalArguments holds the fundamental astronomical arguments.

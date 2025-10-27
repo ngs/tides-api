@@ -2,7 +2,6 @@
 package fes
 
 import (
-	"errors"
 	"fmt"
 	"io/fs"
 	"math"
@@ -237,10 +236,9 @@ func (s *Store) loadConstituent(name string) (*Grid, error) {
 	}
 
 	findFirst := func(candidates []string) (string, error) {
-		errNotFound := errors.New("not found")
-		findByName := func(target string) (string, error) {
+		findByName := func(target string) (string, bool, error) {
 			var match string
-			errFound := errors.New("found")
+			var found bool
 			err := filepath.WalkDir(s.dataDir, func(path string, d fs.DirEntry, err error) error {
 				if err != nil {
 					return err
@@ -250,26 +248,24 @@ func (s *Store) loadConstituent(name string) (*Grid, error) {
 				}
 				if strings.EqualFold(d.Name(), target) {
 					match = path
-					return errFound
+					found = true
+					return fs.SkipAll
 				}
 				return nil
 			})
 			if err != nil {
-				if err == errFound {
-					return match, nil
-				}
-				return "", err
+				return "", false, err
 			}
-			return "", errNotFound
+			return match, found, nil
 		}
 
 		for _, candidate := range candidates {
-			path, err := findByName(candidate)
-			if err == nil {
-				return path, nil
-			}
-			if !errors.Is(err, errNotFound) {
+			path, found, err := findByName(candidate)
+			if err != nil {
 				return "", err
+			}
+			if found {
+				return path, nil
 			}
 		}
 		return "", fmt.Errorf("not found")

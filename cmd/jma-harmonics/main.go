@@ -258,6 +258,9 @@ func fitHarmonics(samples []sample, lon float64, names []string) (float64, []ove
 	return round(intercept, 6), overrides, nil
 }
 
+// solveSPD solves a linear system Ax = b where A is a symmetric positive-definite matrix,
+// using Cholesky decomposition. The input matrix 'mat' must be square, symmetric, and positive-definite.
+// Returns the solution vector x, or an error if the matrix is not positive-definite.
 func solveSPD(mat [][]float64, rhs []float64) ([]float64, error) {
 	n := len(rhs)
 	L := make([][]float64, n)

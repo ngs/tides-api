@@ -9,6 +9,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"math"
 	"net/http"
 	"os"
 	"time"
@@ -121,7 +122,7 @@ func calculateStats(diffs []float64) (mean, rmse float64) {
 		sse += dd * dd
 	}
 	if len(diffs) > 0 {
-		rmse = mathSqrt(sse / float64(len(diffs)))
+		rmse = math.Sqrt(sse / float64(len(diffs)))
 	}
 	return mean, rmse
 }
@@ -185,14 +186,3 @@ func main() {
 	fmt.Printf("\nRecommended datum_offset_m: %.3f\n", mean)
 }
 
-func mathSqrt(v float64) float64 { // Avoid importing math for tiny tool size.
-	// Newton-Raphson.
-	if v <= 0 {
-		return 0
-	}
-	x := v
-	for i := 0; i < 20; i++ {
-		x = 0.5 * (x + v/x)
-	}
-	return x
-}

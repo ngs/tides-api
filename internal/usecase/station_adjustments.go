@@ -173,7 +173,11 @@ func haversineKm(lat1, lon1, lat2, lon2 float64) float64 {
 	toRad := func(x float64) float64 { return x * math.Pi / 180.0 }
 	dLat := toRad(lat2 - lat1)
 	dLon := toRad(lon2 - lon1)
-	a := math.Sin(dLat/2)*math.Sin(dLat/2) + math.Cos(toRad(lat1))*math.Cos(toRad(lat2))*math.Sin(dLon/2)*math.Sin(dLon/2)
+	sinHalfDLat := math.Sin(dLat / 2)
+	sinHalfDLon := math.Sin(dLon / 2)
+	cosLat1 := math.Cos(toRad(lat1))
+	cosLat2 := math.Cos(toRad(lat2))
+	a := sinHalfDLat*sinHalfDLat + cosLat1*cosLat2*sinHalfDLon*sinHalfDLon
 	c := 2 * math.Atan2(math.Sqrt(a), math.Sqrt(1-a))
 	return R * c
 }
