@@ -5,10 +5,13 @@ A high-performance tidal prediction API written in Go, providing harmonic tidal 
 ## Features
 
 - **Harmonic Tidal Analysis**: Calculate tide heights using standard tidal constituents (M2, S2, K1, O1, etc.)
+- **Astronomical Nodal Corrections**: Accurate predictions using nodal corrections based on Schureman (1958)
 - **Extrema Detection**: Automatically identify high and low tides with parabolic interpolation
 - **Multiple Data Sources**:
   - Mock CSV data for development and testing
-  - FES2014/2022 NetCDF support (future integration ready)
+  - FES2014/2022 NetCDF support with bilinear interpolation
+  - JMA hourly data calibration for Japanese ports
+- **Flexible Configuration**: Datum offsets, timezone selection, and phase conventions
 - **Clean Architecture**: Hexagonal architecture with clear separation of concerns
 - **Production Ready**: Docker support, comprehensive tests, and monitoring
 - **RESTful API**: Simple JSON API with ISO8601 timestamps
@@ -262,17 +265,37 @@ With the provided Kisarazu overrides the RMSE against JMA's official hourly pred
 
 ```
 tides-api/
-├── cmd/server/          # Application entry point
+├── cmd/
+│   ├── server/              # Main API server
+│   ├── jma-harmonics/       # JMA harmonic analysis tool
+│   ├── jma-compare/         # JMA vs API comparison tool
+│   ├── jma-overrides/       # Batch JMA station processor
+│   └── fes-generator/       # FES NetCDF test data generator
 ├── internal/
-│   ├── domain/          # Core business logic (tides, constituents)
-│   ├── usecase/         # Application use cases
-│   ├── adapter/         # External adapters
-│   │   ├── store/       # Data stores (CSV, FES)
-│   │   └── interp/      # Interpolation utilities
-│   └── http/            # HTTP handlers and routing
-├── data/                # Tidal constituent data
-├── Makefile             # Development commands
-├── Dockerfile           # Container configuration
+│   ├── domain/              # Core business logic
+│   │   ├── tide.go          # Tidal prediction engine
+│   │   ├── constituents.go  # Standard constituent definitions
+│   │   ├── nodal.go         # Astronomical nodal corrections
+│   │   └── nodal_coeffs.go  # External coefficient loader
+│   ├── usecase/             # Application use cases
+│   │   ├── predict.go       # Prediction orchestration
+│   │   └── station_adjustments.go  # JMA calibration
+│   ├── adapter/             # External adapters
+│   │   ├── store/           # Data stores
+│   │   │   ├── csv/         # CSV mock data
+│   │   │   ├── fes/         # FES NetCDF loader
+│   │   │   └── bathymetry/  # GEBCO bathymetry
+│   │   ├── interp/          # Bilinear interpolation
+│   │   └── geoid/           # EGM2008 geoid heights
+│   ├── http/                # HTTP handlers and routing
+│   └── jma/                 # JMA fixed-width data parser
+├── data/                    # Tidal data files
+│   ├── astro_coeffs.json    # Nodal correction coefficients
+│   ├── jma_datum_offsets.json      # JMA datum offsets
+│   ├── jma_station_overrides.json  # JMA constituent overrides
+│   └── mock_*_constituents.csv     # Mock station data
+├── Makefile                 # Development commands
+├── Dockerfile               # Container configuration
 └── README.md
 ```
 
@@ -358,6 +381,12 @@ Environment variables (see `.env.example`):
 | `PORT` | `8080` | Server port |
 | `DATA_DIR` | `./data` | CSV data directory |
 | `FES_DIR` | `./data/fes` | FES NetCDF directory |
+| `GEBCO_PATH` | - | Path to GEBCO bathymetry NetCDF file |
+| `MSS_PATH` | - | Path to MSS (Mean Sea Surface) NetCDF file |
+| `GEOID_PATH` | - | Path to EGM2008 geoid NetCDF file |
+| `ASTRO_COEFFS_PATH` | `data/astro_coeffs.json` | Path to nodal correction coefficients |
+| `DATUM_OFFSETS_PATH` | `data/jma_datum_offsets.json` | Path to JMA datum offsets |
+| `STATION_OVERRIDES_PATH` | `data/jma_station_overrides.json` | Path to JMA station overrides |
 | `TZ` | `Asia/Tokyo` | Display timezone |
 
 ## Tidal Physics
@@ -367,15 +396,16 @@ Environment variables (see `.env.example`):
 Tide height is calculated using:
 
 ```
-η(t) = Σ f_k · A_k · cos(ω_k · Δt + φ_k - u_k) + MSL
+η(t) = Σ f_k · A_k · cos(ω_k · Δt + φ_k - u_k) + MSL + datum_offset
 ```
 
 Where:
 - `A_k`: Amplitude of constituent k (meters)
 - `φ_k`: Greenwich phase (degrees)
 - `ω_k`: Angular speed (degrees/hour)
-- `f_k`, `u_k`: Nodal corrections (currently identity in MVP)
+- `f_k`, `u_k`: Nodal corrections computed from astronomical arguments (Schureman 1958)
 - `MSL`: Mean Sea Level offset
+- `datum_offset`: Optional vertical datum adjustment (e.g., for JMA calibration)
 
 ### Supported Constituents
 
@@ -401,27 +431,39 @@ High and low tides are detected using:
 1. First derivative sign change detection
 2. Parabolic interpolation for sub-interval accuracy
 
-## Future Enhancements
+## Implemented Features
+
+### ✅ Completed
+
+- [x] FES NetCDF integration with bilinear interpolation
+- [x] Nodal corrections for improved accuracy (Schureman 1958)
+- [x] Astronomical arguments (V0+u)
+- [x] JMA hourly data calibration and harmonic fitting
+- [x] Datum offset support for vertical adjustments
+- [x] Custom timezone support (UTC/JST)
+- [x] Phase convention options (FES Greenwich / V+u)
+- [x] Automatic longitude wrapping for NetCDF grids
+- [x] Complex-valued constituent support (Re/Im pairs)
+- [x] Bathymetry data integration (GEBCO)
+- [x] Geoid height corrections (EGM2008)
 
 ### Planned Features
 
-- [ ] FES NetCDF integration with bilinear interpolation
-- [ ] Nodal corrections for improved accuracy
-- [ ] Astronomical arguments (V0+u)
 - [ ] Additional vertical datums (LAT, MLLW, etc.)
 - [ ] Prediction caching layer
 - [ ] GraphQL API
 - [ ] WebSocket streaming
 - [ ] Multiple station batch queries
-- [ ] Custom time zones in response
+- [ ] OpenAPI/Swagger documentation
 
 ### Extension Points
 
 The codebase is designed for easy extension:
 
-- **Nodal Corrections**: Implement `NodalCorrection` interface in `domain/constituents.go`
+- **Nodal Corrections**: External coefficient files supported via `ASTRO_COEFFS_PATH` environment variable
 - **New Data Sources**: Implement `ConstituentLoader` interface in `adapter/store/store.go`
-- **Custom Datums**: Extend `PredictionParams` in `domain/tide.go`
+- **Custom Datums**: Use `datum_offset_m` parameter or extend `PredictionParams` in `domain/tide.go`
+- **Station Overrides**: Add entries to `data/jma_station_overrides.json` for custom calibrations
 
 ## Performance
 
@@ -445,9 +487,13 @@ FES data is available from [AVISO+](https://www.aviso.altimetry.fr/) and require
 
 ### References
 
-1. Foreman, M. G. G. (1977). Manual for tidal heights analysis and prediction. Institute of Ocean Sciences, Patricia Bay.
+1. Schureman, P. (1958). Manual of Harmonic Analysis and Prediction of Tides. U.S. Coast and Geodetic Survey Special Publication No. 98. U.S. Government Printing Office, Washington, D.C.
 
-2. Pawlowicz, R., Beardsley, B., & Lentz, S. (2002). Classical tidal harmonic analysis including error estimates in MATLAB using T_TIDE. Computers & Geosciences, 28(8), 929-937.
+2. Foreman, M. G. G. (1977). Manual for tidal heights analysis and prediction. Institute of Ocean Sciences, Patricia Bay.
+
+3. Pawlowicz, R., Beardsley, B., & Lentz, S. (2002). Classical tidal harmonic analysis including error estimates in MATLAB using T_TIDE. Computers & Geosciences, 28(8), 929-937.
+
+4. Carrère L., Lyard F., Cancet M., Guillot A. (2016). FES 2014, a new tidal model—Validation results and perspectives for improvements. In Proceedings of the ESA living planet symposium (pp. 9-13).
 
 ## Support
 
@@ -467,4 +513,8 @@ Contributions are welcome! Please:
 ## Acknowledgments
 
 - FES team at LEGOS/CNES/CLS for tidal model data
+- Japan Meteorological Agency (JMA) for hourly tide predictions data
+- NOAA for EGM2008 geoid model
+- GEBCO for bathymetry data
+- pyTMD project for nodal correction coefficient references
 - Go community for excellent libraries (Gin, go-netcdf)
