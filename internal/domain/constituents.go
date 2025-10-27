@@ -55,15 +55,23 @@ var StandardConstituents = map[string]float64{
 // NodalCorrection is an interface for applying nodal corrections.
 // MVP: returns identity (1.0, 0.0).
 type NodalCorrection interface {
-	// GetFactors returns the amplitude factor (f) and phase correction (u) in degrees.
-	GetFactors(constituent string, t float64) (f float64, u float64)
+    // GetFactors returns the amplitude factor (f) and phase correction (u) in degrees.
+    GetFactors(constituent string, t float64) (f float64, u float64)
+    // GetEquilibriumArgument returns the equilibrium argument V (degrees) for the constituent.
+    // V accounts for slowly varying astronomical arguments (Schureman/Foreman).
+    // Implementations may return 0 if not available.
+    GetEquilibriumArgument(constituent string, t float64) float64
 }
 
 // IdentityNodalCorrection is a dummy implementation that returns no correction.
 type IdentityNodalCorrection struct{}
 
 func (i *IdentityNodalCorrection) GetFactors(constituent string, t float64) (float64, float64) {
-	return 1.0, 0.0
+    return 1.0, 0.0
+}
+
+func (i *IdentityNodalCorrection) GetEquilibriumArgument(constituent string, t float64) float64 {
+    return 0.0
 }
 
 // GetConstituentSpeed returns the angular speed for a given constituent name.

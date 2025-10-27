@@ -68,6 +68,9 @@ make docker-run
 | `interval` | string | No | Time interval (default: 10m) | `10m`, `1h` |
 | `datum` | string | No | Vertical datum (default: MSL) | `MSL`, `LAT` |
 | `source` | string | No | Data source (auto-detect) | `csv`, `fes` |
+| `datum_offset_m` | float | No | Constant vertical offset [m] applied to all predicted heights | `0.768` |
+| `timezone` | string | No | Output timezone for timestamps | `utc`, `jst` |
+| `phase_convention` | string | No | Phase convention (`fes_greenwich` default, or `vu`) | `fes_greenwich`, `vu` |
 
 \* Either `station_id` OR `lat`+`lon` must be provided (mutually exclusive)
 

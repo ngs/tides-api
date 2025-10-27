@@ -125,6 +125,12 @@ FES_HOST := ftp-access.aviso.altimetry.fr
 FES_PORT := 21
 FES_REMOTE_PATH := /auxiliary/tide_model/fes2014_elevations_and_load/fes2014b_elevations
 
+# Common constituent sets
+FES_CONSTITUENTS_MAJOR := m2 s2 k1 o1 n2 k2 p1 q1
+FES_CONSTITUENTS_SHALLOW := m4 m6 mk3 s4 mn4 ms4
+FES_CONSTITUENTS_LONG := mf mm ssa sa
+FES_CONSTITUENTS_ALL := $(FES_CONSTITUENTS_MAJOR) $(FES_CONSTITUENTS_SHALLOW) $(FES_CONSTITUENTS_LONG)
+
 fes-setup: ## Setup FES credentials (interactive)
 	@echo "FES2014 Data Download Setup"
 	@echo "============================"
@@ -191,6 +197,50 @@ fes-check: ## Check downloaded FES files
 	@find $(FES_DIR) -name "*_amplitude.nc" -type f | while read file; do \
 		basename=$$( basename $$file _amplitude.nc ); \
 		echo "  - $$basename"; \
+	done
+
+# Download a single constituent (amplitude + phase files if available)
+# Usage: make fes-download-constituent CONST=m2
+fes-download-constituent: ## Download specific constituent NetCDF (set CONST=m2, s2, m4, ...)
+	@if [ -z "$(FES_USER)" ] || [ -z "$(FES_PASS)" ]; then \
+		echo "Error: FES credentials not found. Run 'make fes-setup' first."; \
+		exit 1; \
+	fi
+	@if [ -z "$(CONST)" ]; then \
+		echo "Usage: make fes-download-constituent CONST=m2"; \
+		exit 1; \
+	fi
+	@echo "Downloading constituent: $(CONST)"
+	@mkdir -p $(FES_DIR)
+	@const=$$(echo "$(CONST)" | tr '[:upper:]' '[:lower:]'); \
+	lftp -u $(FES_USER),$(FES_PASS) ftp://$(FES_HOST):$(FES_PORT) -e "\
+		cd $(FES_REMOTE_PATH); \
+		lcd $(FES_DIR); \
+		get -c $$const\_amplitude.nc || true; \
+		get -c $$const\_phase.nc || true; \
+		get -c $$const.nc || true; \
+		bye"; \
+	true
+
+# Download groups of constituents (per-file, without the large archive)
+fes-download-major-files: ## Download major constituents (per-file)
+	@for c in $(FES_CONSTITUENTS_MAJOR); do \
+		$(MAKE) -s fes-download-constituent CONST=$$c || exit 1; \
+	done
+
+fes-download-shallow: ## Download shallow-water constituents (M4, MS4, MN4, M6, MK3, S4)
+	@for c in $(FES_CONSTITUENTS_SHALLOW); do \
+		$(MAKE) -s fes-download-constituent CONST=$$c || exit 1; \
+	done
+
+fes-download-longperiod: ## Download long-period constituents (Mf, Mm, Ssa, Sa)
+	@for c in $(FES_CONSTITUENTS_LONG); do \
+		$(MAKE) -s fes-download-constituent CONST=$$c || exit 1; \
+	done
+
+fes-download-all-files: ## Download all supported constituents (per-file)
+	@for c in $(FES_CONSTITUENTS_ALL); do \
+		$(MAKE) -s fes-download-constituent CONST=$$c || exit 1; \
 	done
 
 fes-clean: ## Remove downloaded FES files
@@ -515,3 +565,16 @@ gcs-check-bathy: ## Check bathymetry data in Cloud Storage
 .PHONY: gcs-check-project gcs-create-bucket gcs-upload-fes gcs-download-fes gcs-list-fes gcs-check-fes gcs-delete-bucket
 .PHONY: bathy-setup bathy-download-gebco bathy-download-dtu-mss geoid-download-egm2008 bathy-download-all bathy-check bathy-clean
 .PHONY: gcs-create-bathy-bucket gcs-upload-bathy gcs-download-bathy gcs-list-bathy gcs-check-bathy
+ASTRO_JSON ?= tmp/astro_coeffs_additions.json
+
+astro-coeffs-install: ## Install external nodal coefficients JSON (ASTRO_JSON -> data/astro_coeffs.json)
+	@if [ ! -f "$(ASTRO_JSON)" ]; then \
+		echo "Source JSON not found: $(ASTRO_JSON)"; \
+		echo "Set ASTRO_JSON=/path/to/astro_coeffs.json or place file at tmp/astro_coeffs_additions.json"; \
+		exit 1; \
+	fi
+	@cp "$(ASTRO_JSON)" data/astro_coeffs.json
+	@echo "Installed nodal coefficients: $(ASTRO_JSON) -> data/astro_coeffs.json"
+
+astro-coeffs-show: ## Show currently installed nodal coefficients JSON header
+	@echo "data/astro_coeffs.json:" && head -n 40 data/astro_coeffs.json || true

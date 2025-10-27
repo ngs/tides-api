@@ -4,10 +4,10 @@
 *.dll
 *.so
 *.dylib
-tides-api
-jma-compare
-!cmd/*
+/tides-api
+/jma-compare
 /server
+.gocache
 
 # Test binary, built with `go test -c`
 *.test

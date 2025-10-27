@@ -28,12 +28,25 @@ type Extrema struct {
 
 // PredictionParams holds all parameters needed for tide prediction.
 type PredictionParams struct {
-	Constituents    []ConstituentParam
-	MSL             float64         // Mean Sea Level offset in meters.
-	Longitude       float64         // Longitude in degrees (for Greenwich phase correction).
-	NodalCorrection NodalCorrection // Interface for nodal corrections.
-	ReferenceTime   time.Time       // Reference time for phase (usually Unix epoch or local epoch).
+    Constituents    []ConstituentParam
+    MSL             float64         // Mean Sea Level offset in meters.
+    Longitude       float64         // Longitude in degrees (for Greenwich phase correction).
+    NodalCorrection NodalCorrection // Interface for nodal corrections.
+    ReferenceTime   time.Time       // Reference time for phase (usually Unix epoch or local epoch).
+    PhaseConvention PhaseConvention // Phase handling convention.
 }
+
+// PhaseConvention selects the phase formula to use.
+// - PhaseConvFESGreenwich: use Greenwich phase lag with longitude correction (typical for FES)
+//   h(t) = f A cos(ωΔt - φ + λ + u) + MSL
+// - PhaseConvVu: use equilibrium argument V + nodal correction u
+//   h(t) = f A cos(ωΔt + (V + u) - φ) + MSL
+type PhaseConvention int
+
+const (
+    PhaseConvFESGreenwich PhaseConvention = iota
+    PhaseConvVu
+)
 
 // CalculateTideHeight computes the tide height at a specific time using harmonic analysis
 // η(t) = Σ f_k * A_k * cos(ω_k * Δt + φ_k - u_k) + MSL
@@ -44,31 +57,38 @@ type PredictionParams struct {
 //   - φ_k is phase in degrees
 //   - Δt is hours since reference time
 func CalculateTideHeight(t time.Time, params PredictionParams) float64 {
-	if params.NodalCorrection == nil {
-		params.NodalCorrection = &IdentityNodalCorrection{}
-	}
+    if params.NodalCorrection == nil {
+        params.NodalCorrection = &IdentityNodalCorrection{}
+    }
 
-	deltaHours := t.Sub(params.ReferenceTime).Hours()
-	height := params.MSL
+    deltaHours := t.Sub(params.ReferenceTime).Hours()
+    height := params.MSL
 
-	for _, c := range params.Constituents {
-		// Get nodal corrections.
-		f, u := params.NodalCorrection.GetFactors(c.Name, deltaHours)
+    for _, c := range params.Constituents {
+        // Get nodal corrections.
+        f, u := params.NodalCorrection.GetFactors(c.Name, deltaHours)
 
-		// Calculate phase angle in degrees.
-		// FES phase convention: h(t) = A * cos(ωt - φ + λ + u)
-		// where φ is Greenwich phase lag (in degrees) and λ is longitude (in degrees).
-		// The longitude correction accounts for the geographic offset from Greenwich.
-		phaseAngleDeg := c.SpeedDegPerHr*deltaHours - c.PhaseDeg + params.Longitude + u
+        // Calculate phase angle in degrees based on convention.
+        var phaseAngleDeg float64
+        switch params.PhaseConvention {
+        case PhaseConvFESGreenwich:
+            // FES Greenwich phase lag φ with geographic longitude correction.
+            // h(t) = f A cos(ωΔt - φ + λ + u)
+            phaseAngleDeg = c.SpeedDegPerHr*deltaHours - c.PhaseDeg + params.Longitude + u
+        default:
+            // Use equilibrium argument V + u (if provided by nodal correction). Avoid longitude.
+            v := params.NodalCorrection.GetEquilibriumArgument(c.Name, deltaHours)
+            phaseAngleDeg = c.SpeedDegPerHr*deltaHours + v + u - c.PhaseDeg
+        }
 
-		// Convert to radians and calculate contribution.
-		phaseAngleRad := Deg2Rad(phaseAngleDeg)
-		contribution := f * c.AmplitudeM * math.Cos(phaseAngleRad)
+        // Convert to radians and calculate contribution.
+        phaseAngleRad := Deg2Rad(phaseAngleDeg)
+        contribution := f * c.AmplitudeM * math.Cos(phaseAngleRad)
 
-		height += contribution
-	}
+        height += contribution
+    }
 
-	return height
+    return height
 }
 
 // GeneratePredictions creates a time series of tide predictions.

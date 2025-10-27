@@ -1,15 +1,15 @@
 package http
 
 import (
-	"fmt"
-	"net/http"
-	"strconv"
-	"time"
+    "fmt"
+    "net/http"
+    "strconv"
+    "time"
 
 	"github.com/gin-gonic/gin"
 
 	"go.ngs.io/tides-api/internal/domain"
-	"go.ngs.io/tides-api/internal/usecase"
+    "go.ngs.io/tides-api/internal/usecase"
 )
 
 // Handler handles HTTP requests for tide predictions.
@@ -26,24 +26,28 @@ func NewHandler(predictionUC *usecase.PredictionUseCase) *Handler {
 
 // GetPredictions handles GET /v1/tides/predictions.
 func (h *Handler) GetPredictions(c *gin.Context) {
-	// Parse query parameters.
-	latStr := c.Query("lat")
-	lonStr := c.Query("lon")
-	stationID := c.Query("station_id")
-	startStr := c.Query("start")
-	endStr := c.Query("end")
-	intervalStr := c.Query("interval")
-	datum := c.Query("datum")
-	source := c.Query("source")
-	timezone := c.Query("timezone") // "utc" (default) or "jst".
-	datumOffsetStr := c.Query("datum_offset_m")
+    // Parse query parameters.
+    latStr := c.Query("lat")
+    lonStr := c.Query("lon")
+    stationID := c.Query("station_id")
+    startStr := c.Query("start")
+    endStr := c.Query("end")
+    intervalStr := c.Query("interval")
+    datum := c.Query("datum")
+    source := c.Query("source")
+    timezone := c.Query("timezone") // "utc" (default) or "jst".
+    datumOffsetStr := c.Query("datum_offset_m")
+    phaseConv := c.Query("phase_convention") // "fes_greenwich" (default) or "vu"
 
 	// Build request.
-	req := usecase.PredictionRequest{
-		Datum:    datum,
-		Source:   source,
-		Timezone: timezone,
-	}
+    req := usecase.PredictionRequest{
+        Datum:    datum,
+        Source:   source,
+        Timezone: timezone,
+    }
+    if phaseConv != "" {
+        req.PhaseConvention = phaseConv
+    }
 
 	// Parse lat/lon.
 	if latStr != "" && lonStr != "" {
@@ -66,35 +70,52 @@ func (h *Handler) GetPredictions(c *gin.Context) {
 		req.StationID = &stationID
 	}
 
-	// Parse time range.
-	if startStr == "" {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "start parameter is required"})
-		return
-	}
-	if endStr == "" {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "end parameter is required"})
-		return
-	}
+    // Parse time range. If missing and lat/lon provided, default to local (resolved) current day 00:00-24:00.
+    if startStr == "" && endStr == "" && req.Lat != nil && req.Lon != nil {
+        // Resolve simple timezone: JST for Japan bounding box, otherwise UTC.
+        loc, tzCode := resolveTimezoneForLatLon(*req.Lat, *req.Lon)
+        if timezone == "" {
+            req.Timezone = tzCode
+        }
+        nowLocal := time.Now().In(loc)
+        y, m, d := nowLocal.Date()
+        startLocal := time.Date(y, m, d, 0, 0, 0, 0, loc)
+        endLocal := startLocal.Add(24 * time.Hour)
+        req.Start = startLocal.UTC()
+        req.End = endLocal.UTC()
+    } else {
+        if startStr == "" {
+            c.JSON(http.StatusBadRequest, gin.H{"error": "start parameter is required"})
+            return
+        }
+        if endStr == "" {
+            c.JSON(http.StatusBadRequest, gin.H{"error": "end parameter is required"})
+            return
+        }
+        start, err := time.Parse(time.RFC3339, startStr)
+        if err != nil {
+            c.JSON(http.StatusBadRequest, gin.H{"error": fmt.Sprintf("invalid start time (expected RFC3339): %v", err)})
+            return
+        }
+        end, err := time.Parse(time.RFC3339, endStr)
+        if err != nil {
+            c.JSON(http.StatusBadRequest, gin.H{"error": fmt.Sprintf("invalid end time (expected RFC3339): %v", err)})
+            return
+        }
+        req.Start = start.UTC()
+        req.End = end.UTC()
+    }
 
-	start, err := time.Parse(time.RFC3339, startStr)
-	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": fmt.Sprintf("invalid start time (expected RFC3339): %v", err)})
-		return
-	}
+    // If timezone not provided but lat/lon present, set output TZ based on coordinates (always-on).
+    if req.Timezone == "" && req.Lat != nil && req.Lon != nil {
+        _, tzCode := resolveTimezoneForLatLon(*req.Lat, *req.Lon)
+        req.Timezone = tzCode
+    }
 
-	end, err := time.Parse(time.RFC3339, endStr)
-	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": fmt.Sprintf("invalid end time (expected RFC3339): %v", err)})
-		return
-	}
-
-	req.Start = start.UTC()
-	req.End = end.UTC()
-
-	// Parse interval (default: 10m).
-	if intervalStr == "" {
-		intervalStr = "10m"
-	}
+    // Parse interval (default: 30m for better readability).
+    if intervalStr == "" {
+        intervalStr = "30m"
+    }
 
 	interval, err := time.ParseDuration(intervalStr)
 	if err != nil {
@@ -113,14 +134,24 @@ func (h *Handler) GetPredictions(c *gin.Context) {
 		req.DatumOffsetM = &off
 	}
 
-	// Execute use case.
-	response, err := h.predictionUC.Execute(req)
+    // Execute use case.
+    response, err := h.predictionUC.Execute(req)
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
 
 	c.JSON(http.StatusOK, response)
+}
+
+// resolveTimezoneForLatLon returns a best-effort location and label based on lat/lon.
+// Currently: Japan bounding box -> JST (+09:00), otherwise UTC.
+func resolveTimezoneForLatLon(lat, lon float64) (*time.Location, string) {
+    // Rough Japan bounding box (includes main islands): 20–46N, 122–154E
+    if lat >= 20 && lat <= 46 && lon >= 122 && lon <= 154 {
+        return time.FixedZone("JST", 9*60*60), "jst"
+    }
+    return time.FixedZone("UTC", 0), "utc"
 }
 
 // GetConstituents handles GET /v1/constituents.

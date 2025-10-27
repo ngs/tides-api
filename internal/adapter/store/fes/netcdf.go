@@ -1,16 +1,18 @@
 package fes
 
 import (
-	"fmt"
-	"os"
-	"path/filepath"
-	"strings"
-	"sync"
+    "fmt"
+    "math"
+    "os"
+    "path/filepath"
+    "strings"
+    "sync"
+    "io/fs"
 
-	"github.com/fhs/go-netcdf/netcdf"
+    "github.com/fhs/go-netcdf/netcdf"
 
-	"go.ngs.io/tides-api/internal/adapter/interp"
-	"go.ngs.io/tides-api/internal/domain"
+    "go.ngs.io/tides-api/internal/adapter/interp"
+    "go.ngs.io/tides-api/internal/domain"
 )
 
 // FESStore provides access to FES2014/2022 NetCDF tidal constituent data.
@@ -119,50 +121,67 @@ func (s *FESStore) LoadForStation(stationID string) ([]domain.ConstituentParam, 
 
 // GetAvailableConstituents returns the list of constituents available in FES data.
 func (s *FESStore) GetAvailableConstituents() ([]string, error) {
-	// Check if dataDir exists.
-	if _, err := os.Stat(s.dataDir); os.IsNotExist(err) {
-		return nil, fmt.Errorf("FES data directory does not exist: %s", s.dataDir)
-	}
+    // Check if dataDir exists.
+    if _, err := os.Stat(s.dataDir); os.IsNotExist(err) {
+        return nil, fmt.Errorf("FES data directory does not exist: %s", s.dataDir)
+    }
 
-	// Scan directory for NetCDF files.
-	entries, err := os.ReadDir(s.dataDir)
-	if err != nil {
-		return nil, fmt.Errorf("failed to read FES directory: %w", err)
-	}
+    // Map to store unique constituent names.
+    constituentMap := make(map[string]bool)
 
-	// Map to store unique constituent names.
-	constituentMap := make(map[string]bool)
+    // Recursively walk directory for NetCDF files.
+    err := filepath.WalkDir(s.dataDir, func(path string, d fs.DirEntry, err error) error {
+        if err != nil {
+            return err
+        }
+        if d.IsDir() {
+            return nil
+        }
+        name := d.Name()
+        if !strings.HasSuffix(name, ".nc") {
+            return nil
+        }
+        baseName := strings.TrimSuffix(name, ".nc")
+        for _, suffix := range []string{"_amplitude", "_amp", "_phase", "_pha"} {
+            baseName = strings.TrimSuffix(baseName, suffix)
+        }
+        if baseName == "" {
+            return nil
+        }
+        constName := strings.ToUpper(baseName)
+        if _, ok := domain.GetConstituentSpeed(constName); ok {
+            constituentMap[constName] = true
+        }
+        return nil
+    })
+    if err != nil {
+        return nil, fmt.Errorf("failed to walk FES directory: %w", err)
+    }
 
-	// Look for amplitude files (e.g., m2_amplitude.nc).
-	for _, entry := range entries {
-		if entry.IsDir() {
-			continue
-		}
-
-		name := entry.Name()
-		if !strings.HasSuffix(name, ".nc") {
-			continue
-		}
-
-		// Extract constituent name.
-		// Support patterns: m2_amplitude.nc, m2.nc, m2_amp.nc.
-		baseName := strings.TrimSuffix(name, ".nc")
-
-		// Remove common suffixes.
-		for _, suffix := range []string{"_amplitude", "_amp", "_phase", "_pha"} {
-			baseName = strings.TrimSuffix(baseName, suffix)
-		}
-
-		if baseName != "" {
-			// Convert to uppercase for consistency (M2, S2, etc.).
-			constName := strings.ToUpper(baseName)
-
-			// Verify it's a known constituent.
-			if _, ok := domain.GetConstituentSpeed(constName); ok {
-				constituentMap[constName] = true
-			}
-		}
-	}
+    // Ensure shallow-water constituents are considered if corresponding files exist.
+    ensure := []string{"m4", "ms4", "mn4", "m6", "s4", "mk3"}
+    for _, base := range ensure {
+        found := false
+        // Look for combined file first (e.g., m4.nc)
+        _ = filepath.WalkDir(s.dataDir, func(path string, d fs.DirEntry, err error) error {
+            if err != nil || found {
+                return nil
+            }
+            if d.IsDir() {
+                return nil
+            }
+            if strings.EqualFold(d.Name(), base+".nc") || strings.EqualFold(d.Name(), base+"_amplitude.nc") {
+                found = true
+            }
+            return nil
+        })
+        if found {
+            upper := strings.ToUpper(base)
+            if _, ok := domain.GetConstituentSpeed(upper); ok {
+                constituentMap[upper] = true
+            }
+        }
+    }
 
 	// Convert map to slice.
 	constituents := make([]string, 0, len(constituentMap))
@@ -186,43 +205,54 @@ func (s *FESStore) loadConstituent(name string) (*FESGrid, error) {
 	// Load from NetCDF files.
 	config := DefaultFESConfig()
 
-	// Construct file paths (try multiple patterns).
-	nameLower := strings.ToLower(name)
-	ampPaths := []string{
-		filepath.Join(s.dataDir, fmt.Sprintf("%s_amplitude.nc", nameLower)),
-		filepath.Join(s.dataDir, fmt.Sprintf("%s_amp.nc", nameLower)),
-		filepath.Join(s.dataDir, fmt.Sprintf("%s.nc", nameLower)),
-	}
+    // Build candidate base names and search recursively under dataDir.
+    nameLower := strings.ToLower(name)
+    ampCandidates := []string{
+        fmt.Sprintf("%s_amplitude.nc", nameLower),
+        fmt.Sprintf("%s_amp.nc", nameLower),
+        fmt.Sprintf("%s.nc", nameLower), // Combined file
+    }
+    phaCandidates := []string{
+        fmt.Sprintf("%s_phase.nc", nameLower),
+        fmt.Sprintf("%s_pha.nc", nameLower),
+        fmt.Sprintf("%s.nc", nameLower), // Combined file
+    }
 
-	phaPaths := []string{
-		filepath.Join(s.dataDir, fmt.Sprintf("%s_phase.nc", nameLower)),
-		filepath.Join(s.dataDir, fmt.Sprintf("%s_pha.nc", nameLower)),
-		filepath.Join(s.dataDir, fmt.Sprintf("%s.nc", nameLower)), // Combined file.
-	}
+    findFirst := func(candidates []string) (string, error) {
+        found := ""
+        err := filepath.WalkDir(s.dataDir, func(path string, d fs.DirEntry, err error) error {
+            if err != nil {
+                return err
+            }
+            if d.IsDir() {
+                return nil
+            }
+            name := d.Name()
+            for _, c := range candidates {
+                if name == c {
+                    found = path
+                    return filepath.SkipDir // stop early (no deeper walk needed here)
+                }
+            }
+            return nil
+        })
+        if err != nil && err != filepath.SkipDir {
+            return "", err
+        }
+        if found == "" {
+            return "", fmt.Errorf("not found")
+        }
+        return found, nil
+    }
 
-	// Find amplitude file.
-	var ampPath string
-	for _, path := range ampPaths {
-		if _, err := os.Stat(path); err == nil {
-			ampPath = path
-			break
-		}
-	}
-	if ampPath == "" {
-		return nil, fmt.Errorf("amplitude file not found for constituent %s", name)
-	}
-
-	// Find phase file.
-	var phaPath string
-	for _, path := range phaPaths {
-		if _, err := os.Stat(path); err == nil {
-			phaPath = path
-			break
-		}
-	}
-	if phaPath == "" {
-		return nil, fmt.Errorf("phase file not found for constituent %s", name)
-	}
+    ampPath, err := findFirst(ampCandidates)
+    if err != nil {
+        return nil, fmt.Errorf("amplitude file not found for constituent %s", name)
+    }
+    phaPath, err := findFirst(phaCandidates)
+    if err != nil {
+        return nil, fmt.Errorf("phase file not found for constituent %s", name)
+    }
 
 	// Load amplitude grid.
 	ampGrid, err := loadNetCDFGrid(ampPath, config.LatVarName, config.LonVarName, config.AmplitudeVarName)
@@ -260,10 +290,32 @@ func loadNetCDFGrid(filepath, latVarName, lonVarName, dataVarName string) (*inte
 	}
 	defer nc.Close()
 
-	// Try multiple variable name patterns.
-	latNames := []string{latVarName, "latitude", "lat", "y"}
-	lonNames := []string{lonVarName, "longitude", "lon", "x"}
-	dataNames := []string{dataVarName, "data", "z"}
+    // Try multiple variable name patterns.
+    latNames := []string{latVarName, "latitude", "lat", "y"}
+    lonNames := []string{lonVarName, "longitude", "lon", "x"}
+
+    // Build candidate data variable names. Expand to include common FES names.
+    lower := strings.ToLower(dataVarName)
+    dataNames := []string{}
+    // Always try the provided name first
+    if dataVarName != "" {
+        dataNames = append(dataNames, dataVarName)
+    }
+    // Heuristics for amplitude vs phase
+    if strings.Contains(lower, "amp") || strings.Contains(lower, "ampl") {
+        dataNames = append(dataNames,
+            "amplitude", "Amplitude", "amp", "Amp",
+            "HA", "Ha", "ha", "H", "h",
+        )
+    } else if strings.Contains(lower, "pha") || strings.Contains(lower, "phase") {
+        dataNames = append(dataNames,
+            "phase", "Phase", "pha", "Pha",
+            "Hg", "HG", "hg", "g", "G",
+            "phi", "Phi", "PHI", "phase_deg",
+        )
+    }
+    // Generic fallbacks
+    dataNames = append(dataNames, "data", "z")
 
 	// Read latitude.
 	var latData []float64
@@ -297,22 +349,144 @@ func loadNetCDFGrid(filepath, latVarName, lonVarName, dataVarName string) (*inte
 		return nil, fmt.Errorf("longitude variable not found (tried: %v)", lonNames)
 	}
 
-	// Read data variable.
-	var dataVar netcdf.Var
-	var dataFound bool
-	for _, name := range dataNames {
-		if v, err := nc.Var(name); err == nil {
-			dataVar = v
-			dataFound = true
-			break
-		}
-	}
-	if !dataFound {
-		return nil, fmt.Errorf("data variable not found (tried: %v)", dataNames)
-	}
+    // Read data variable.
+    var dataVar netcdf.Var
+    var dataFound bool
+    for _, name := range dataNames {
+        if v, err := nc.Var(name); err == nil {
+            dataVar = v
+            dataFound = true
+            break
+        }
+    }
+    if !dataFound {
+        // Fallback: try complex pair variables (real/imag) and derive amplitude or phase.
+        // Common candidate names.
+        realCandidates := []string{"hRe", "Hre", "hre", "Re", "RE", "real", "Real"}
+        imagCandidates := []string{"hIm", "Him", "him", "Im", "IM", "imag", "Imag"}
 
-	// Read 2D data array.
-	dims, err := dataVar.Dims()
+        var realVar, imagVar netcdf.Var
+        var haveRe, haveIm bool
+        for _, rn := range realCandidates {
+            if v, err := nc.Var(rn); err == nil {
+                realVar = v
+                haveRe = true
+                break
+            }
+        }
+        for _, in := range imagCandidates {
+            if v, err := nc.Var(in); err == nil {
+                imagVar = v
+                haveIm = true
+                break
+            }
+        }
+        if !haveRe || !haveIm {
+            return nil, fmt.Errorf("data variable not found (tried: %v), and no complex pair detected", dataNames)
+        }
+
+        // Helper to read 2D var matching lat/lon orientation.
+        read2D := func(v netcdf.Var, nLat, nLon int) ([][]float64, error) {
+            dims, err := v.Dims()
+            if err != nil {
+                return nil, fmt.Errorf("failed to get dimensions: %w", err)
+            }
+            if len(dims) != 2 {
+                return nil, fmt.Errorf("expected 2D data, got %dD", len(dims))
+            }
+            dim0Len, err := dims[0].Len()
+            if err != nil {
+                return nil, fmt.Errorf("failed to get dim0 length: %w", err)
+            }
+            dim1Len, err := dims[1].Len()
+            if err != nil {
+                return nil, fmt.Errorf("failed to get dim1 length: %w", err)
+            }
+            if dim0Len == uint64(nLat) && dim1Len == uint64(nLon) {
+                return read2DFloat64Var(v, nLat, nLon)
+            }
+            if dim0Len == uint64(nLon) && dim1Len == uint64(nLat) {
+                transposed, err := read2DFloat64Var(v, nLon, nLat)
+                if err != nil {
+                    return nil, err
+                }
+                return transpose2D(transposed), nil
+            }
+            return nil, fmt.Errorf("dimension mismatch for complex var: data is [%d, %d], expected [%d, %d] or [%d, %d]",
+                dim0Len, dim1Len, nLat, nLon, nLon, nLat)
+        }
+
+        nLat := len(latData)
+        nLon := len(lonData)
+        reVals, err := read2D(realVar, nLat, nLon)
+        if err != nil {
+            return nil, fmt.Errorf("failed to read real component: %w", err)
+        }
+        imVals, err := read2D(imagVar, nLat, nLon)
+        if err != nil {
+            return nil, fmt.Errorf("failed to read imag component: %w", err)
+        }
+
+        // Handle fill values for complex components (replace with 0).
+        if fv, ok := getFillValue(realVar); ok {
+            for i := range reVals {
+                for j := range reVals[i] {
+                    if reVals[i][j] == fv {
+                        reVals[i][j] = 0
+                    }
+                }
+            }
+        }
+        if fv, ok := getFillValue(imagVar); ok {
+            for i := range imVals {
+                for j := range imVals[i] {
+                    if imVals[i][j] == fv {
+                        imVals[i][j] = 0
+                    }
+                }
+            }
+        }
+
+        // Decide whether amplitude or phase is requested based on dataVarName hint.
+        want := strings.ToLower(dataVarName)
+        values := make([][]float64, nLat)
+        for i := 0; i < nLat; i++ {
+            values[i] = make([]float64, nLon)
+            for j := 0; j < nLon; j++ {
+                re := reVals[i][j]
+                im := imVals[i][j]
+                if strings.Contains(want, "amp") || strings.Contains(want, "ampl") || want == "amplitude" {
+                    // Amplitude = sqrt(re^2 + im^2)
+                    values[i][j] = math.Hypot(re, im)
+                } else {
+                    // Phase (degrees) = atan2(im, re) mapped to [0, 360)
+                    deg := domain.Rad2Deg(math.Atan2(im, re))
+                    if deg < 0 {
+                        deg += 360.0
+                    }
+                    values[i][j] = deg
+                }
+            }
+        }
+
+        // Apply cm->m conversion for amplitude from ocean_tide combined files.
+        if (strings.Contains(want, "amp") || want == "amplitude") && strings.Contains(strings.ToLower(filepath), "ocean_tide") {
+            for i := range values {
+                for j := range values[i] {
+                    values[i][j] /= 100.0
+                }
+            }
+        }
+
+        grid := &interp.Grid2D{X: lonData, Y: latData, Values: values}
+        if err := grid.Validate(); err != nil {
+            return nil, fmt.Errorf("invalid grid: %w", err)
+        }
+        return grid, nil
+    }
+
+    // Read 2D data array.
+    dims, err := dataVar.Dims()
 	if err != nil {
 		return nil, fmt.Errorf("failed to get dimensions: %w", err)
 	}
@@ -351,16 +525,38 @@ func loadNetCDFGrid(filepath, latVarName, lonVarName, dataVarName string) (*inte
 			dim0Len, dim1Len, nLat, nLon, nLon, nLat)
 	}
 
-	if err != nil {
-		return nil, fmt.Errorf("failed to read data: %w", err)
-	}
+    if err != nil {
+        return nil, fmt.Errorf("failed to read data: %w", err)
+    }
 
-	// Create Grid2D.
-	grid := &interp.Grid2D{
-		X:      lonData,
-		Y:      latData,
-		Values: values,
-	}
+    // Replace _FillValue or missing_value with 0 to avoid huge artifacts.
+    if fv, ok := getFillValue(dataVar); ok {
+        for i := range values {
+            for j := range values[i] {
+                if values[i][j] == fv {
+                    values[i][j] = 0
+                }
+            }
+        }
+    }
+
+    // Unit conversion for amplitude grids: known FES ocean_tide files use centimeters.
+    // If reading from ocean_tide path and variable name indicates amplitude, convert cm->m.
+    if (strings.Contains(strings.ToLower(dataVarName), "amp") || strings.ToLower(dataVarName) == "amplitude") &&
+        strings.Contains(strings.ToLower(filepath), "ocean_tide") {
+        for i := range values {
+            for j := range values[i] {
+                values[i][j] /= 100.0
+            }
+        }
+    }
+
+    // Create Grid2D.
+    grid := &interp.Grid2D{
+        X:      lonData,
+        Y:      latData,
+        Values: values,
+    }
 
 	// Validate grid.
 	if err := grid.Validate(); err != nil {
@@ -370,46 +566,116 @@ func loadNetCDFGrid(filepath, latVarName, lonVarName, dataVarName string) (*inte
 	return grid, nil
 }
 
+// getFillValue returns the _FillValue or missing_value attribute if present as float64.
+func getFillValue(v netcdf.Var) (float64, bool) {
+    for _, name := range []string{"_FillValue", "missing_value"} {
+        a := v.Attr(name)
+        if a == (netcdf.Attr{}) {
+            continue
+        }
+        if n, err := a.Len(); err == nil && n > 0 {
+            // Try float64
+            buf64 := make([]float64, 1)
+            if err := a.ReadFloat64s(buf64); err == nil {
+                return buf64[0], true
+            }
+            // Try float32
+            buf32 := make([]float32, 1)
+            if err := a.ReadFloat32s(buf32); err == nil {
+                return float64(buf32[0]), true
+            }
+            // Try int32
+            bufi := make([]int32, 1)
+            if err := a.ReadInt32s(bufi); err == nil {
+                return float64(bufi[0]), true
+            }
+        }
+    }
+    return 0, false
+}
+
 // readFloat64Var reads a 1D float64 array from a NetCDF variable.
 func readFloat64Var(v netcdf.Var) ([]float64, error) {
-	dims, err := v.Dims()
-	if err != nil {
-		return nil, fmt.Errorf("failed to get dimensions: %w", err)
-	}
-	if len(dims) != 1 {
-		return nil, fmt.Errorf("expected 1D variable, got %dD", len(dims))
-	}
+    dims, err := v.Dims()
+    if err != nil {
+        return nil, fmt.Errorf("failed to get dimensions: %w", err)
+    }
+    if len(dims) != 1 {
+        return nil, fmt.Errorf("expected 1D variable, got %dD", len(dims))
+    }
 
-	length, err := dims[0].Len()
-	if err != nil {
-		return nil, err
-	}
+    length, err := dims[0].Len()
+    if err != nil {
+        return nil, err
+    }
 
-	data := make([]float64, length)
-	err = v.ReadFloat64s(data)
-	if err != nil {
-		return nil, err
-	}
-
-	return data, nil
+    if t, err := v.Type(); err == nil {
+    switch t {
+    case netcdf.DOUBLE:
+        data := make([]float64, length)
+        if err := v.ReadFloat64s(data); err != nil { return nil, err }
+        return data, nil
+    case netcdf.FLOAT:
+        tmp := make([]float32, length)
+        if err := v.ReadFloat32s(tmp); err != nil { return nil, err }
+        out := make([]float64, length)
+        for i, val := range tmp { out[i] = float64(val) }
+        return out, nil
+    case netcdf.INT:
+        tmp := make([]int32, length)
+        if err := v.ReadInt32s(tmp); err != nil { return nil, err }
+        out := make([]float64, length)
+        for i, val := range tmp { out[i] = float64(val) }
+        return out, nil
+    case netcdf.SHORT:
+        tmp := make([]int16, length)
+        if err := v.ReadInt16s(tmp); err != nil { return nil, err }
+        out := make([]float64, length)
+        for i, val := range tmp { out[i] = float64(val) }
+        return out, nil
+    default:
+        return nil, fmt.Errorf("unsupported var type: %v", t)
+    }
+    }
+    return nil, fmt.Errorf("failed to get var type: %v", err)
 }
 
 // read2DFloat64Var reads a 2D float64 array from a NetCDF variable.
 func read2DFloat64Var(v netcdf.Var, nRows, nCols int) ([][]float64, error) {
-	// Read as flat array.
-	flatData := make([]float64, nRows*nCols)
-	err := v.ReadFloat64s(flatData)
-	if err != nil {
-		return nil, err
-	}
+    total := nRows * nCols
+    var flat []float64
+    if t, err := v.Type(); err == nil {
+    switch t {
+    case netcdf.DOUBLE:
+        flat = make([]float64, total)
+        if err := v.ReadFloat64s(flat); err != nil { return nil, err }
+    case netcdf.FLOAT:
+        tmp := make([]float32, total)
+        if err := v.ReadFloat32s(tmp); err != nil { return nil, err }
+        flat = make([]float64, total)
+        for i, val := range tmp { flat[i] = float64(val) }
+    case netcdf.INT:
+        tmp := make([]int32, total)
+        if err := v.ReadInt32s(tmp); err != nil { return nil, err }
+        flat = make([]float64, total)
+        for i, val := range tmp { flat[i] = float64(val) }
+    case netcdf.SHORT:
+        tmp := make([]int16, total)
+        if err := v.ReadInt16s(tmp); err != nil { return nil, err }
+        flat = make([]float64, total)
+        for i, val := range tmp { flat[i] = float64(val) }
+    default:
+        return nil, fmt.Errorf("unsupported data type: %v", t)
+    }
+    } else {
+        return nil, fmt.Errorf("failed to get var type: %v", err)
+    }
 
-	// Convert to 2D array.
-	values := make([][]float64, nRows)
-	for i := 0; i < nRows; i++ {
-		values[i] = flatData[i*nCols : (i+1)*nCols]
-	}
-
-	return values, nil
+    values := make([][]float64, nRows)
+    for i := 0; i < nRows; i++ {
+        values[i] = flat[i*nCols : (i+1)*nCols]
+    }
+    return values, nil
 }
 
 // transpose2D transposes a 2D array.
