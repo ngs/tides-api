@@ -19,19 +19,3 @@ AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
 LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
-
----
-
-THIRD PARTY LICENSES
-
-This software uses the following open source packages:
-
-1. Gin Web Framework (https://github.com/gin-gonic/gin)
-   - MIT License
-
-2. go-netcdf (https://github.com/fhs/go-netcdf)
-   - MIT License
-
-NOTE: If using FES2014/2022 tidal model data, additional licensing terms apply.
-FES data is provided by AVISO+ and requires separate registration and license agreement.
-See: https://www.aviso.altimetry.fr/

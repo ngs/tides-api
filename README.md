@@ -473,7 +473,10 @@ The codebase is designed for easy extension:
 
 ## License
 
-[Specify your license here]
+MIT License. See [LICENSE](LICENSE) for details.
+
+See [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) for third-party package
+notices and FES data licensing notes.
 
 ## Attribution
 
