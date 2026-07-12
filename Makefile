@@ -94,8 +94,8 @@ docker-clean: ## Remove Docker image
 
 # API testing targets
 curl-health: ## Test health endpoint
-	@echo "Testing /healthz endpoint..."
-	curl -s http://localhost:8080/healthz | jq .
+	@echo "Testing /health endpoint..."
+	curl -s http://localhost:8080/health | jq .
 
 curl-constituents: ## Test constituents endpoint
 	@echo "Testing /v1/constituents endpoint..."

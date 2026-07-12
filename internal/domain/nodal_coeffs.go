@@ -104,9 +104,29 @@ func LoadNodalCoeffSet(path string) (*NodalCoeffSet, error) {
 	}
 	set.ByName = make(map[string]NodalCoeff)
 	for _, c := range set.Coeffs {
+		if err := c.validateHarmonicKeys(); err != nil {
+			return nil, fmt.Errorf("invalid nodal coeff json: %w", err)
+		}
 		set.ByName[c.Name] = c
 	}
 	return &set, nil
+}
+
+// validateHarmonicKeys ensures every harmonic key in the coefficient maps is a
+// valid integer, so evaluation never silently treats a bad key as k=0.
+func (c *NodalCoeff) validateHarmonicKeys() error {
+	maps := []map[string]float64{c.FCos, c.FSin, c.UCos, c.USin}
+	if c.Nonlinear != nil {
+		maps = append(maps, c.Nonlinear.Term1Sin, c.Nonlinear.Term2Cos)
+	}
+	for _, m := range maps {
+		for k := range m {
+			if _, err := strconv.Atoi(k); err != nil {
+				return fmt.Errorf("constituent %q: non-numeric harmonic key %q", c.Name, k)
+			}
+		}
+	}
+	return nil
 }
 
 // LoadNodalCoeffSetFromEnv loads nodal coefficients from the path specified in ASTRO_COEFFS_PATH env var.

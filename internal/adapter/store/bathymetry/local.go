@@ -11,6 +11,7 @@ import (
 
 	"go.ngs.io/tides-api/internal/adapter/geoid"
 	"go.ngs.io/tides-api/internal/adapter/interp"
+	"go.ngs.io/tides-api/internal/adapter/ncio"
 	"go.ngs.io/tides-api/internal/domain"
 )
 
@@ -42,6 +43,10 @@ func (b *gridBounds) contains(lat, lon float64) bool {
 	lonCheck := lon
 	if b.lonWrap360 {
 		lonCheck = normalizeLon360(lonCheck)
+		// Seam-stitched grids extend past 360: map wrapped values into range.
+		if lonCheck < b.minLon && lonCheck+360 <= b.maxLon {
+			lonCheck += 360
+		}
 	}
 	return lat >= b.minLat && lat <= b.maxLat && lonCheck >= b.minLon && lonCheck <= b.maxLon
 }
@@ -91,10 +96,15 @@ func normalizeLon360(lon float64) float64 {
 }
 
 func normalizeLonForAxis(lons []float64, lon float64) float64 {
-	if lonAxisRequiresWrap(lons) {
-		return normalizeLon360(lon)
+	if !lonAxisRequiresWrap(lons) {
+		return lon
 	}
-	return lon
+	l := normalizeLon360(lon)
+	// Seam-stitched grids extend past 360: map wrapped values into the axis range.
+	if len(lons) > 0 && l < lons[0] && l+360 <= lons[len(lons)-1] {
+		l += 360
+	}
+	return l
 }
 
 // NewLocalStore creates a new local file-based bathymetry store.
@@ -233,6 +243,10 @@ func (s *LocalStore) Close() error {
 //
 //nolint:gocyclo,nestif,gosec // Complex NetCDF loading logic with many cases.
 func loadNetCDFGridSubset(filepath, latVarName, lonVarName, dataVarName string, targetLat, targetLon, margin float64) (*interp.Grid2D, error) {
+	// libnetcdf is not thread-safe: serialize the whole open-read-close sequence.
+	ncio.Lock()
+	defer ncio.Unlock()
+
 	// Open NetCDF file.
 	nc, err := netcdf.OpenFile(filepath, netcdf.NOWRITE)
 	if err != nil {
@@ -277,58 +291,6 @@ func loadNetCDFGridSubset(filepath, latVarName, lonVarName, dataVarName string, 
 		return nil, fmt.Errorf("longitude variable not found (tried: %v)", lonNames)
 	}
 
-	// Calculate subset indices if margin is specified.
-	var latStart, latEnd, lonStart, lonEnd int
-	var subsetLat, subsetLon []float64
-
-	if margin > 0 {
-		adjLon := normalizeLonForAxis(lonData, targetLon)
-		adjLonMinus := normalizeLonForAxis(lonData, targetLon-margin)
-		adjLonPlus := normalizeLonForAxis(lonData, targetLon+margin)
-
-		// Find indices for the subset region.
-		latStartIdx := findNearestIndex(latData, targetLat-margin)
-		latEndIdx := findNearestIndex(latData, targetLat+margin)
-		lonStartIdx := findNearestIndex(lonData, adjLonMinus)
-		lonEndIdx := findNearestIndex(lonData, adjLonPlus)
-		if lonStartIdx == lonEndIdx {
-			// Ensure at least one additional column if possible.
-			lonEndIdx = clamp(lonEndIdx+1, 0, len(lonData)-1)
-		}
-		// If adjusted lon fell outside range (e.g., wrapped) ensure target column included.
-		lonTargetIdx := findNearestIndex(lonData, adjLon)
-		if lonTargetIdx < lonStartIdx {
-			lonStartIdx = lonTargetIdx
-		}
-		if lonTargetIdx > lonEndIdx {
-			lonEndIdx = lonTargetIdx
-		}
-
-		// Ensure proper ordering (start <= end).
-		if latStartIdx > latEndIdx {
-			latStartIdx, latEndIdx = latEndIdx, latStartIdx
-		}
-		if lonStartIdx > lonEndIdx {
-			lonStartIdx, lonEndIdx = lonEndIdx, lonStartIdx
-		}
-
-		// Clamp to valid ranges and ensure we have at least 2 points.
-		latStart = clamp(latStartIdx, 0, len(latData)-2)
-		latEnd = clamp(latEndIdx+1, latStart+2, len(latData))
-		lonStart = clamp(lonStartIdx, 0, len(lonData)-2)
-		lonEnd = clamp(lonEndIdx+1, lonStart+2, len(lonData))
-
-		// Extract subset of coordinate arrays.
-		subsetLat = latData[latStart:latEnd]
-		subsetLon = lonData[lonStart:lonEnd]
-	} else {
-		// Load entire grid.
-		latStart, latEnd = 0, len(latData)
-		lonStart, lonEnd = 0, len(lonData)
-		subsetLat = latData
-		subsetLon = lonData
-	}
-
 	// Read data variable.
 	var dataVar netcdf.Var
 	var dataFound bool
@@ -343,7 +305,7 @@ func loadNetCDFGridSubset(filepath, latVarName, lonVarName, dataVarName string, 
 		return nil, fmt.Errorf("data variable not found (tried: %v)", dataNames)
 	}
 
-	// Read 2D data array.
+	// Determine dimension ordering of the 2D data array.
 	dims, err := dataVar.Dims()
 	if err != nil {
 		return nil, fmt.Errorf("failed to get dimensions: %w", err)
@@ -352,7 +314,6 @@ func loadNetCDFGridSubset(filepath, latVarName, lonVarName, dataVarName string, 
 		return nil, fmt.Errorf("expected 2D data, got %dD", len(dims))
 	}
 
-	// Determine which dimension is lat and which is lon.
 	nLat := len(latData)
 	nLon := len(lonData)
 
@@ -365,71 +326,166 @@ func loadNetCDFGridSubset(filepath, latVarName, lonVarName, dataVarName string, 
 		return nil, fmt.Errorf("failed to get dim1 length: %w", err)
 	}
 
-	// Read data based on dimension order.
-	var values [][]float64
-
-	// Determine dimension ordering.
-	type dimOrder int
-	const (
-		latLonOrder dimOrder = iota
-		lonLatOrder
-		unknownOrder
-	)
-
-	order := unknownOrder
+	var latFirst bool
 	switch {
 	case dim0Len == uint64(nLat) && dim1Len == uint64(nLon):
-		order = latLonOrder
+		latFirst = true
 	case dim0Len == uint64(nLon) && dim1Len == uint64(nLat):
-		order = lonLatOrder
-	}
-
-	// Calculate subset dimensions.
-	nSubsetLat := latEnd - latStart
-	nSubsetLon := lonEnd - lonStart
-
-	switch order {
-	case latLonOrder:
-		// Data is [lat, lon].
-		if margin > 0 {
-			values, err = read2DFloat64VarSubset(dataVar, latStart, lonStart, nSubsetLat, nSubsetLon)
-		} else {
-			values, err = read2DFloat64Var(dataVar, nLat, nLon)
-		}
-	case lonLatOrder:
-		// Data is [lon, lat] - need to transpose.
-		var transposed [][]float64
-		if margin > 0 {
-			transposed, err = read2DFloat64VarSubset(dataVar, lonStart, latStart, nSubsetLon, nSubsetLat)
-		} else {
-			transposed, err = read2DFloat64Var(dataVar, nLon, nLat)
-		}
-		if err != nil {
-			return nil, err
-		}
-		values = transpose2D(transposed)
-	case unknownOrder:
+		latFirst = false
+	default:
 		return nil, fmt.Errorf("dimension mismatch: data is [%d, %d], expected [%d, %d] or [%d, %d]",
 			dim0Len, dim1Len, nLat, nLon, nLon, nLat)
 	}
 
+	// readWindow reads a [lat, lon] oriented window regardless of the on-disk order.
+	readWindow := func(latStart, lonStart, nRows, nCols int) ([][]float64, error) {
+		if latFirst {
+			return read2DFloat64VarSubset(dataVar, latStart, lonStart, nRows, nCols)
+		}
+		transposed, err := read2DFloat64VarSubset(dataVar, lonStart, latStart, nCols, nRows)
+		if err != nil {
+			return nil, err
+		}
+		return transpose2D(transposed), nil
+	}
+
+	buildGrid := func(x, y []float64, values [][]float64) (*interp.Grid2D, error) {
+		grid := &interp.Grid2D{X: x, Y: y, Values: values}
+		if err := grid.Validate(); err != nil {
+			return nil, fmt.Errorf("invalid grid: %w", err)
+		}
+		return grid, nil
+	}
+
+	if margin <= 0 {
+		// Load entire grid.
+		values, err := readWindow(0, 0, nLat, nLon)
+		if err != nil {
+			return nil, fmt.Errorf("failed to read data: %w", err)
+		}
+		return buildGrid(lonData, latData, values)
+	}
+
+	// Latitude subset window.
+	latStartIdx := findNearestIndex(latData, targetLat-margin)
+	latEndIdx := findNearestIndex(latData, targetLat+margin)
+	if latStartIdx > latEndIdx {
+		latStartIdx, latEndIdx = latEndIdx, latStartIdx
+	}
+	latStart := clamp(latStartIdx, 0, nLat-2)
+	latEnd := clamp(latEndIdx+1, latStart+2, nLat)
+	nSubsetLat := latEnd - latStart
+	subsetLat := latData[latStart:latEnd]
+
+	adjLon := normalizeLonForAxis(lonData, targetLon)
+	adjLonMinus := normalizeLon360IfWrapped(lonData, targetLon-margin)
+	adjLonPlus := normalizeLon360IfWrapped(lonData, targetLon+margin)
+
+	// Detect a subset window that crosses the 0/360 seam of a global wrapped
+	// axis: the normalized west edge ends up east of the normalized east edge.
+	if lonAxisRequiresWrap(lonData) && lonData[nLon-1]-lonData[0] > 180 && adjLonMinus > adjLonPlus {
+		return loadSeamCrossingSubset(lonData, latStart, nSubsetLat, subsetLat, adjLonMinus, adjLonPlus, readWindow, buildGrid)
+	}
+
+	// Regular (non seam-crossing) longitude subset window.
+	lonStartIdx := findNearestIndex(lonData, adjLonMinus)
+	lonEndIdx := findNearestIndex(lonData, adjLonPlus)
+	if lonStartIdx == lonEndIdx {
+		// Ensure at least one additional column if possible.
+		lonEndIdx = clamp(lonEndIdx+1, 0, nLon-1)
+	}
+	// If adjusted lon fell outside range (e.g., wrapped) ensure target column included.
+	lonTargetIdx := findNearestIndex(lonData, adjLon)
+	if lonTargetIdx < lonStartIdx {
+		lonStartIdx = lonTargetIdx
+	}
+	if lonTargetIdx > lonEndIdx {
+		lonEndIdx = lonTargetIdx
+	}
+	if lonStartIdx > lonEndIdx {
+		lonStartIdx, lonEndIdx = lonEndIdx, lonStartIdx
+	}
+	lonStart := clamp(lonStartIdx, 0, nLon-2)
+	lonEnd := clamp(lonEndIdx+1, lonStart+2, nLon)
+
+	values, err := readWindow(latStart, lonStart, nSubsetLat, lonEnd-lonStart)
 	if err != nil {
 		return nil, fmt.Errorf("failed to read data: %w", err)
 	}
+	return buildGrid(lonData[lonStart:lonEnd], subsetLat, values)
+}
 
-	// Create Grid2D.
-	grid := &interp.Grid2D{
-		X:      subsetLon,
-		Y:      subsetLat,
-		Values: values,
+// normalizeLon360IfWrapped normalizes lon into [0, 360) when the axis is a
+// wrapped (0..360 style) axis; otherwise returns lon unchanged.
+func normalizeLon360IfWrapped(lons []float64, lon float64) float64 {
+	if lonAxisRequiresWrap(lons) {
+		return normalizeLon360(lon)
+	}
+	return lon
+}
+
+// loadSeamCrossingSubset reads a longitude window that crosses the 0/360 seam
+// of a global wrapped axis. It reads two hyperslabs - the west segment
+// [adjLonMinus .. end of axis] and the east segment [start of axis .. adjLonPlus] -
+// and stitches them into one grid, unwrapping the east longitudes by +360 so
+// the X axis stays strictly increasing.
+func loadSeamCrossingSubset(
+	lonData []float64,
+	latStart, nSubsetLat int,
+	subsetLat []float64,
+	adjLonMinus, adjLonPlus float64,
+	readWindow func(latStart, lonStart, nRows, nCols int) ([][]float64, error),
+	buildGrid func(x, y []float64, values [][]float64) (*interp.Grid2D, error),
+) (*interp.Grid2D, error) {
+	nLon := len(lonData)
+
+	westStart := clamp(findNearestIndex(lonData, adjLonMinus), 0, nLon-1)
+	eastEnd := clamp(findNearestIndex(lonData, adjLonPlus), 0, nLon-1)
+
+	// Skip east columns that would duplicate the end of the west segment
+	// (e.g. an axis that contains both 0 and 360).
+	eastSkip := 0
+	for eastSkip <= eastEnd && lonData[eastSkip]+360 <= lonData[nLon-1]+1e-9 {
+		eastSkip++
+	}
+	nEast := eastEnd + 1 - eastSkip
+	if nEast <= 0 {
+		// The west segment alone covers the window (axis includes the seam column).
+		if westStart > nLon-2 {
+			westStart = nLon - 2
+		}
+		values, err := readWindow(latStart, westStart, nSubsetLat, nLon-westStart)
+		if err != nil {
+			return nil, fmt.Errorf("failed to read data: %w", err)
+		}
+		return buildGrid(lonData[westStart:], subsetLat, values)
+	}
+	nWest := nLon - westStart
+
+	westVals, err := readWindow(latStart, westStart, nSubsetLat, nWest)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read west data segment: %w", err)
+	}
+	eastVals, err := readWindow(latStart, eastSkip, nSubsetLat, nEast)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read east data segment: %w", err)
 	}
 
-	// Validate grid.
-	if err := grid.Validate(); err != nil {
-		return nil, fmt.Errorf("invalid grid: %w", err)
+	subsetLon := make([]float64, 0, nWest+nEast)
+	subsetLon = append(subsetLon, lonData[westStart:]...)
+	for _, lo := range lonData[eastSkip : eastEnd+1] {
+		subsetLon = append(subsetLon, lo+360)
 	}
 
-	return grid, nil
+	values := make([][]float64, nSubsetLat)
+	for i := range values {
+		row := make([]float64, 0, nWest+nEast)
+		row = append(row, westVals[i]...)
+		row = append(row, eastVals[i]...)
+		values[i] = row
+	}
+
+	return buildGrid(subsetLon, subsetLat, values)
 }
 
 // readFloat64Var reads a 1D float64 array from a NetCDF variable.
@@ -515,35 +571,8 @@ func read2DFloat64Var(v netcdf.Var, nRows, nCols int) ([][]float64, error) {
 		return nil, fmt.Errorf("unsupported data type: %v (expected DOUBLE, FLOAT, INT, or SHORT)", varType)
 	}
 
-	// Apply scale_factor if present.
-	scaleAttr := v.Attr("scale_factor")
-	attrLen, err := scaleAttr.Len()
-	//nolint:nestif // NetCDF attribute handling requires nested conditionals.
-	if err == nil && attrLen > 0 {
-		// Scale_factor attribute exists.
-		var scaleVal float64
-
-		// Try reading as float64 first.
-		scaleData := make([]float64, 1)
-		err = scaleAttr.ReadFloat64s(scaleData)
-		if err == nil {
-			scaleVal = scaleData[0]
-		} else {
-			// If ReadFloat64s failed, try int32.
-			int32Data := make([]int32, 1)
-			err = scaleAttr.ReadInt32s(int32Data)
-			if err == nil {
-				scaleVal = float64(int32Data[0])
-			}
-		}
-
-		if err == nil && scaleVal != 0 {
-			// Apply scale factor to all values.
-			for i := range flatData {
-				flatData[i] *= scaleVal
-			}
-		}
-	}
+	// Apply scale_factor and add_offset if present (packed data support).
+	applyScaleOffset(v, flatData)
 
 	// Convert to 2D array.
 	values := make([][]float64, nRows)
@@ -552,6 +581,50 @@ func read2DFloat64Var(v netcdf.Var, nRows, nCols int) ([][]float64, error) {
 	}
 
 	return values, nil
+}
+
+// applyScaleOffset unpacks values using the scale_factor and add_offset
+// attributes when present: true = packed*scale_factor + add_offset.
+func applyScaleOffset(v netcdf.Var, flatData []float64) {
+	if scale, ok := getAttrFloat(v, "scale_factor"); ok && scale != 0 {
+		for i := range flatData {
+			flatData[i] *= scale
+		}
+	}
+	if offset, ok := getAttrFloat(v, "add_offset"); ok && offset != 0 {
+		for i := range flatData {
+			flatData[i] += offset
+		}
+	}
+}
+
+// getAttrFloat reads a scalar numeric attribute as float64.
+func getAttrFloat(v netcdf.Var, name string) (float64, bool) {
+	a := v.Attr(name)
+	if a == (netcdf.Attr{}) {
+		return 0, false
+	}
+	n, err := a.Len()
+	if err != nil || n == 0 {
+		return 0, false
+	}
+	buf64 := make([]float64, 1)
+	if err := a.ReadFloat64s(buf64); err == nil {
+		return buf64[0], true
+	}
+	buf32 := make([]float32, 1)
+	if err := a.ReadFloat32s(buf32); err == nil {
+		return float64(buf32[0]), true
+	}
+	bufi := make([]int32, 1)
+	if err := a.ReadInt32s(bufi); err == nil {
+		return float64(bufi[0]), true
+	}
+	bufs := make([]int16, 1)
+	if err := a.ReadInt16s(bufs); err == nil {
+		return float64(bufs[0]), true
+	}
+	return 0, false
 }
 
 // read2DFloat64VarSubset reads a subset of a 2D float64 array from a NetCDF variable.
@@ -618,35 +691,8 @@ func read2DFloat64VarSubset(v netcdf.Var, startRow, startCol, nRows, nCols int) 
 		return nil, fmt.Errorf("unsupported data type: %v (expected DOUBLE, FLOAT, INT, or SHORT)", varType)
 	}
 
-	// Apply scale_factor if present.
-	scaleAttr := v.Attr("scale_factor")
-	attrLen, err := scaleAttr.Len()
-	//nolint:nestif // NetCDF attribute handling requires nested conditionals.
-	if err == nil && attrLen > 0 {
-		// Scale_factor attribute exists.
-		var scaleVal float64
-
-		// Try reading as float64 first.
-		scaleData := make([]float64, 1)
-		err = scaleAttr.ReadFloat64s(scaleData)
-		if err == nil {
-			scaleVal = scaleData[0]
-		} else {
-			// If ReadFloat64s failed, try int32.
-			int32Data := make([]int32, 1)
-			err = scaleAttr.ReadInt32s(int32Data)
-			if err == nil {
-				scaleVal = float64(int32Data[0])
-			}
-		}
-
-		if err == nil && scaleVal != 0 {
-			// Apply scale factor to all values.
-			for i := range flatData {
-				flatData[i] *= scaleVal
-			}
-		}
-	}
+	// Apply scale_factor and add_offset if present (packed data support).
+	applyScaleOffset(v, flatData)
 
 	// Convert to 2D array.
 	values := make([][]float64, nRows)

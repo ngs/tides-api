@@ -21,8 +21,8 @@ func TestCalculateTideHeight_NodalCorrectionUsesAbsoluteTime(t *testing.T) {
 
 	const speedM2 = 28.9841042 // deg/hr
 
-	refA := time.Unix(0, 0).UTC()                            // Unix epoch
-	refB := time.Date(2012, 1, 1, 0, 0, 0, 0, time.UTC)      // FES epoch
+	refA := time.Unix(0, 0).UTC()                       // Unix epoch
+	refB := time.Date(2012, 1, 1, 0, 0, 0, 0, time.UTC) // FES epoch
 
 	// Adjust phase so that omega*deltaT - phase is identical for both reference times:
 	// phaseB = phaseA + omega * (refA - refB), taken mod 360.

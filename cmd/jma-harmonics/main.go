@@ -205,14 +205,19 @@ func fitHarmonics(samples []sample, lon float64, names []string) (float64, []ove
 	}
 	rhs := make([]float64, paramCount)
 
+	unixEpoch := time.Unix(0, 0).UTC()
 	for _, s := range samples {
 		deltaHours := s.Time.Sub(ref).Hours()
+		// Nodal corrections and the equilibrium argument are evaluated at the
+		// absolute observation time, matching domain.CalculateTideHeight.
+		absHours := s.Time.Sub(unixEpoch).Hours()
 		features := make([]float64, paramCount)
 		features[0] = 1
 		idx := 1
 		for i, name := range names {
-			f, u := nodal.GetFactors(name, deltaHours)
-			thetaDeg := speeds[i]*deltaHours + lon + u
+			f, u := nodal.GetFactors(name, absHours)
+			v := nodal.GetEquilibriumArgument(name, absHours)
+			thetaDeg := speeds[i]*deltaHours + v + u
 			thetaRad := domain.Deg2Rad(thetaDeg)
 			cosTerm := f * math.Cos(thetaRad)
 			sinTerm := f * math.Sin(thetaRad)

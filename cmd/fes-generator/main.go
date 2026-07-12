@@ -3,8 +3,10 @@ package main
 
 import (
 	"encoding/csv"
+	"errors"
 	"flag"
 	"fmt"
+	"io"
 	"log"
 	"math"
 	"os"
@@ -45,6 +47,19 @@ func main() {
 	tokyoLon := flag.Float64("tokyo-lon", 139.6503, "Tokyo longitude (reference point)")
 
 	flag.Parse()
+
+	// Validate flags.
+	if *resolution <= 0 {
+		log.Fatalf("Invalid -resolution %v: must be greater than 0", *resolution)
+	}
+	if *region == "custom" {
+		if *latMin > *latMax {
+			log.Fatalf("Invalid custom region: -lat-min (%v) must not be greater than -lat-max (%v)", *latMin, *latMax)
+		}
+		if *lonMin > *lonMax {
+			log.Fatalf("Invalid custom region: -lon-min (%v) must not be greater than -lon-max (%v)", *lonMin, *lonMax)
+		}
+	}
 
 	// Define grid based on region.
 	var grid RegionalGrid
@@ -147,8 +162,11 @@ func readConstituentCSV(path string) ([]ConstituentData, error) {
 	constituents := make([]ConstituentData, 0, 10)
 	for {
 		record, err := reader.Read()
+		if errors.Is(err, io.EOF) {
+			break
+		}
 		if err != nil {
-			break // EOF.
+			return nil, fmt.Errorf("failed to read CSV record: %w", err)
 		}
 
 		if len(record) != 3 {

@@ -28,73 +28,78 @@ type Extrema struct {
 
 // PredictionParams holds all parameters needed for tide prediction.
 type PredictionParams struct {
-    Constituents    []ConstituentParam
-    MSL             float64         // Mean Sea Level offset in meters.
-    Longitude       float64         // Longitude in degrees (for Greenwich phase correction).
-    NodalCorrection NodalCorrection // Interface for nodal corrections.
-    ReferenceTime   time.Time       // Reference time for phase (usually Unix epoch or local epoch).
-    PhaseConvention PhaseConvention // Phase handling convention.
+	Constituents []ConstituentParam
+	MSL          float64 // Mean Sea Level offset in meters.
+	// Longitude is retained for API compatibility. A Greenwich phase lag already
+	// refers phases to the Greenwich meridian, so it is not used in the phase
+	// calculation.
+	Longitude       float64
+	NodalCorrection NodalCorrection // Interface for nodal corrections.
+	ReferenceTime   time.Time       // Reference time for phase (usually Unix epoch or local epoch).
+	PhaseConvention PhaseConvention // Phase handling convention.
 }
 
 // PhaseConvention selects the phase formula to use.
-// - PhaseConvFESGreenwich: use Greenwich phase lag with longitude correction (typical for FES)
-//   h(t) = f A cos(ωΔt - φ + λ + u) + MSL
-// - PhaseConvVu: use equilibrium argument V + nodal correction u
-//   h(t) = f A cos(ωΔt + (V + u) - φ) + MSL
+// Both conventions now evaluate the same Greenwich formula
+//
+//	h(t) = f A cos(ωΔt + V + u - φ) + MSL
+//
+// where V is the Greenwich equilibrium argument and φ is the Greenwich phase
+// lag. Geographic longitude is never added: a Greenwich phase lag already
+// refers phases to the Greenwich meridian. The two constants are kept for
+// backward compatibility of the public API.
 type PhaseConvention int
 
 const (
-	// PhaseConvFESGreenwich uses Greenwich phase lag with longitude correction.
-    PhaseConvFESGreenwich PhaseConvention = iota
+	// PhaseConvFESGreenwich uses the Greenwich phase lag (typical for FES).
+	PhaseConvFESGreenwich PhaseConvention = iota
 	// PhaseConvVu uses equilibrium argument V + nodal correction u.
-    PhaseConvVu
+	PhaseConvVu
 )
 
+// unixEpoch is the origin used to express absolute time as hours for nodal corrections.
+//
+//nolint:gochecknoglobals // Intentional: constant time origin.
+var unixEpoch = time.Unix(0, 0).UTC()
+
 // CalculateTideHeight computes the tide height at a specific time using harmonic analysis
-// η(t) = Σ f_k * A_k * cos(ω_k * Δt + φ_k - u_k) + MSL
+// η(t) = Σ f_k * A_k * cos(ω_k * Δt + V_k + u_k - φ_k) + MSL
 // where:
-//   - f_k, u_k are nodal corrections (amplitude factor and phase correction)
+//   - f_k, u_k are nodal corrections (amplitude factor and phase correction),
+//     evaluated at the absolute prediction time (hours since Unix epoch)
+//   - V_k is the Greenwich equilibrium argument
 //   - A_k is amplitude in meters
 //   - ω_k is angular speed in degrees per hour
-//   - φ_k is phase in degrees
+//   - φ_k is the Greenwich phase lag in degrees
 //   - Δt is hours since reference time
 func CalculateTideHeight(t time.Time, params PredictionParams) float64 {
-    if params.NodalCorrection == nil {
-        params.NodalCorrection = &IdentityNodalCorrection{}
-    }
+	if params.NodalCorrection == nil {
+		params.NodalCorrection = &IdentityNodalCorrection{}
+	}
 
-    deltaHours := t.Sub(params.ReferenceTime).Hours()
-    height := params.MSL
+	deltaHours := t.Sub(params.ReferenceTime).Hours()
+	// Nodal corrections depend on the absolute time being predicted (e.g. the
+	// 18.6-year lunar node cycle), not on the phase reference epoch.
+	absHours := t.Sub(unixEpoch).Hours()
+	height := params.MSL
 
-    for _, c := range params.Constituents {
-        // Get nodal corrections.
-        f, u := params.NodalCorrection.GetFactors(c.Name, deltaHours)
+	for _, c := range params.Constituents {
+		// Get nodal corrections at the absolute time.
+		f, u := params.NodalCorrection.GetFactors(c.Name, absHours)
 
-        // Calculate phase angle in degrees based on convention.
-        var phaseAngleDeg float64
-        switch params.PhaseConvention {
-        case PhaseConvFESGreenwich:
-            // FES Greenwich phase lag φ with geographic longitude correction.
-            // h(t) = f A cos(ωΔt - φ + λ + u)
-            phaseAngleDeg = c.SpeedDegPerHr*deltaHours - c.PhaseDeg + params.Longitude + u
-        case PhaseConvVu:
-            // Use equilibrium argument V + u (if provided by nodal correction). Avoid longitude.
-            v := params.NodalCorrection.GetEquilibriumArgument(c.Name, deltaHours)
-            phaseAngleDeg = c.SpeedDegPerHr*deltaHours + v + u - c.PhaseDeg
-        default:
-            // Use equilibrium argument V + u (if provided by nodal correction). Avoid longitude.
-            v := params.NodalCorrection.GetEquilibriumArgument(c.Name, deltaHours)
-            phaseAngleDeg = c.SpeedDegPerHr*deltaHours + v + u - c.PhaseDeg
-        }
+		// Greenwich phase lag convention (no longitude term):
+		// h(t) = f A cos(ωΔt + V + u - φ)
+		v := params.NodalCorrection.GetEquilibriumArgument(c.Name, absHours)
+		phaseAngleDeg := c.SpeedDegPerHr*deltaHours + v + u - c.PhaseDeg
 
-        // Convert to radians and calculate contribution.
-        phaseAngleRad := Deg2Rad(phaseAngleDeg)
-        contribution := f * c.AmplitudeM * math.Cos(phaseAngleRad)
+		// Convert to radians and calculate contribution.
+		phaseAngleRad := Deg2Rad(phaseAngleDeg)
+		contribution := f * c.AmplitudeM * math.Cos(phaseAngleRad)
 
-        height += contribution
-    }
+		height += contribution
+	}
 
-    return height
+	return height
 }
 
 // GeneratePredictions creates a time series of tide predictions.

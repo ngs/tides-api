@@ -21,8 +21,14 @@ func SetupRouter(predictionUC *usecase.PredictionUseCase) *gin.Engine {
 	// Get allowed origins from environment variable.
 	// Default to allow all origins if not specified.
 	allowedOrigins := os.Getenv("CORS_ALLOWED_ORIGINS")
-	if allowedOrigins != "" {
-		corsConfig.AllowOrigins = strings.Split(allowedOrigins, ",")
+	origins := make([]string, 0)
+	for _, o := range strings.Split(allowedOrigins, ",") {
+		if trimmed := strings.TrimSpace(o); trimmed != "" {
+			origins = append(origins, trimmed)
+		}
+	}
+	if len(origins) > 0 {
+		corsConfig.AllowOrigins = origins
 	} else {
 		corsConfig.AllowAllOrigins = true
 	}

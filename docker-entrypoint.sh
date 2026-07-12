@@ -28,16 +28,22 @@ echo "  TZ: $TZ"
 echo "=================================================="
 
 # Check if FES data exists
-if [ -d "$FES_DIR" ] && [ "$(ls -A $FES_DIR 2>/dev/null | grep -c '\.nc$' || echo 0)" -gt 0 ]; then
-    FES_FILES=$(find "$FES_DIR" -name "*.nc" | wc -l)
+FES_FILES=0
+if [ -d "$FES_DIR" ]; then
+    FES_FILES=$(find "$FES_DIR" -name '*.nc' 2>/dev/null | wc -l | tr -d '[:space:]')
+fi
+if [ "$FES_FILES" -gt 0 ]; then
     echo "FES Data: Found $FES_FILES NetCDF files"
 else
     echo "FES Data: Not found (will use CSV mock data only)"
 fi
 
 # Check if CSV data exists
-if [ -d "$DATA_DIR" ] && [ "$(ls -A $DATA_DIR 2>/dev/null | grep -c '\.csv$' || echo 0)" -gt 0 ]; then
-    CSV_FILES=$(find "$DATA_DIR" -name "*.csv" | wc -l)
+CSV_FILES=0
+if [ -d "$DATA_DIR" ]; then
+    CSV_FILES=$(find "$DATA_DIR" -name '*.csv' 2>/dev/null | wc -l | tr -d '[:space:]')
+fi
+if [ "$CSV_FILES" -gt 0 ]; then
     echo "CSV Data: Found $CSV_FILES files"
 else
     echo "CSV Data: Not found"

@@ -9,13 +9,78 @@ import (
 	"github.com/fhs/go-netcdf/netcdf"
 
 	"go.ngs.io/tides-api/internal/adapter/interp"
+	"go.ngs.io/tides-api/internal/adapter/ncio"
 )
 
 // Store provides geoid height lookups for coordinate transformations.
 type Store struct {
 	geoidPath string // Path to EGM2008 NetCDF file.
 	grid      *interp.Grid2D
+	bounds    *gridBounds
 	mu        sync.RWMutex
+}
+
+// gridBounds describes the geographic coverage of a loaded grid subset.
+type gridBounds struct {
+	minLat, maxLat float64
+	minLon, maxLon float64
+	lonWrap360     bool
+}
+
+func (b *gridBounds) contains(lat, lon float64) bool {
+	if b == nil {
+		return false
+	}
+	lonCheck := lon
+	if b.lonWrap360 {
+		lonCheck = normalizeLon360(lonCheck)
+		if lonCheck < b.minLon && lonCheck+360 <= b.maxLon {
+			lonCheck += 360
+		}
+	}
+	return lat >= b.minLat && lat <= b.maxLat && lonCheck >= b.minLon && lonCheck <= b.maxLon
+}
+
+func boundsFromGrid(grid *interp.Grid2D) *gridBounds {
+	if grid == nil || len(grid.X) == 0 || len(grid.Y) == 0 {
+		return nil
+	}
+	return &gridBounds{
+		minLat:     grid.Y[0],
+		maxLat:     grid.Y[len(grid.Y)-1],
+		minLon:     grid.X[0],
+		maxLon:     grid.X[len(grid.X)-1],
+		lonWrap360: lonAxisRequiresWrap(grid.X),
+	}
+}
+
+// lonAxisRequiresWrap reports whether a longitude axis uses the 0..360 convention.
+func lonAxisRequiresWrap(lons []float64) bool {
+	if len(lons) == 0 {
+		return false
+	}
+	return lons[0] >= 0 && lons[len(lons)-1] > 180
+}
+
+func normalizeLon360(lon float64) float64 {
+	lon = math.Mod(lon, 360)
+	if lon < 0 {
+		lon += 360
+	}
+	return lon
+}
+
+// normalizeLonForAxis maps a query longitude onto the grid's longitude axis
+// convention (0..360 wrapped axes vs. -180..180 axes).
+func normalizeLonForAxis(lons []float64, lon float64) float64 {
+	if !lonAxisRequiresWrap(lons) {
+		return lon
+	}
+	l := normalizeLon360(lon)
+	if len(lons) > 0 && l < lons[0] && l+360 <= lons[len(lons)-1] {
+		l += 360
+	}
+	return l
 }
 
 // NewStore creates a new geoid store.
@@ -36,15 +101,16 @@ func (s *Store) GetGeoidHeight(lat, lon float64) (float64, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	// Load grid on first access.
-	if s.grid == nil {
+	// Load grid on first access, and reload when the requested location falls
+	// outside the currently loaded subset.
+	if s.grid == nil || !s.bounds.contains(lat, lon) {
 		if err := s.loadGrid(lat, lon); err != nil {
 			return 0, fmt.Errorf("failed to load geoid grid: %w", err)
 		}
 	}
 
-	// Interpolate geoid height.
-	height, err := s.grid.InterpolateAt(lon, lat)
+	// Interpolate geoid height (normalizing the longitude to the grid axis).
+	height, err := s.grid.InterpolateAt(normalizeLonForAxis(s.grid.X, lon), lat)
 	if err != nil {
 		return 0, fmt.Errorf("failed to interpolate geoid height: %w", err)
 	}
@@ -54,6 +120,10 @@ func (s *Store) GetGeoidHeight(lat, lon float64) (float64, error) {
 
 // loadGrid loads a subset of the EGM2008 NetCDF grid around the target location.
 func (s *Store) loadGrid(targetLat, targetLon float64) error {
+	// libnetcdf is not thread-safe: serialize the whole open-read-close sequence.
+	ncio.Lock()
+	defer ncio.Unlock()
+
 	nc, err := netcdf.OpenFile(s.geoidPath, netcdf.NOWRITE)
 	if err != nil {
 		return fmt.Errorf("failed to open NetCDF file: %w", err)
@@ -98,11 +168,23 @@ func (s *Store) loadGrid(targetLat, targetLon float64) error {
 	}
 
 	// Calculate subset indices with ±2 degree margin.
+	// Normalize the target longitude to the grid axis convention first
+	// (e.g. lon=-90 on a 0..360 axis maps to 270).
 	const margin = 2.0 // Degrees.
+	adjLon := normalizeLonForAxis(lonData, targetLon)
 	latStartIdx := findNearestIndex(latData, targetLat-margin)
 	latEndIdx := findNearestIndex(latData, targetLat+margin)
-	lonStartIdx := findNearestIndex(lonData, targetLon-margin)
-	lonEndIdx := findNearestIndex(lonData, targetLon+margin)
+	lonStartIdx := findNearestIndex(lonData, adjLon-margin)
+	lonEndIdx := findNearestIndex(lonData, adjLon+margin)
+
+	// Make sure the target column itself is included.
+	lonTargetIdx := findNearestIndex(lonData, adjLon)
+	if lonTargetIdx < lonStartIdx {
+		lonStartIdx = lonTargetIdx
+	}
+	if lonTargetIdx > lonEndIdx {
+		lonEndIdx = lonTargetIdx
+	}
 
 	// Ensure proper ordering (start <= end).
 	if latStartIdx > latEndIdx {
@@ -184,21 +266,25 @@ func (s *Store) loadGrid(targetLat, targetLon float64) error {
 	}
 
 	// Create Grid2D with subset data.
-	s.grid = &interp.Grid2D{
+	grid := &interp.Grid2D{
 		X:      subsetLon,
 		Y:      subsetLat,
 		Values: values,
 	}
 
 	// Validate grid.
-	if err := s.grid.Validate(); err != nil {
+	if err := grid.Validate(); err != nil {
 		return fmt.Errorf("invalid grid: %w", err)
 	}
+
+	s.grid = grid
+	s.bounds = boundsFromGrid(grid)
 
 	return nil
 }
 
 // readFloat64Var reads a 1D float64 array from a NetCDF variable.
+// Supports DOUBLE, FLOAT, INT, and SHORT variable types.
 func readFloat64Var(v netcdf.Var) ([]float64, error) {
 	dims, err := v.Dims()
 	if err != nil {
@@ -213,13 +299,53 @@ func readFloat64Var(v netcdf.Var) ([]float64, error) {
 		return nil, err
 	}
 
-	data := make([]float64, length)
-	err = v.ReadFloat64s(data)
+	t, err := v.Type()
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("failed to get var type: %w", err)
 	}
 
-	return data, nil
+	switch t {
+	case netcdf.DOUBLE:
+		data := make([]float64, length)
+		if err := v.ReadFloat64s(data); err != nil {
+			return nil, err
+		}
+		return data, nil
+	case netcdf.FLOAT:
+		tmp := make([]float32, length)
+		if err := v.ReadFloat32s(tmp); err != nil {
+			return nil, err
+		}
+		out := make([]float64, length)
+		for i, val := range tmp {
+			out[i] = float64(val)
+		}
+		return out, nil
+	case netcdf.INT:
+		tmp := make([]int32, length)
+		if err := v.ReadInt32s(tmp); err != nil {
+			return nil, err
+		}
+		out := make([]float64, length)
+		for i, val := range tmp {
+			out[i] = float64(val)
+		}
+		return out, nil
+	case netcdf.SHORT:
+		tmp := make([]int16, length)
+		if err := v.ReadInt16s(tmp); err != nil {
+			return nil, err
+		}
+		out := make([]float64, length)
+		for i, val := range tmp {
+			out[i] = float64(val)
+		}
+		return out, nil
+	case netcdf.BYTE, netcdf.CHAR, netcdf.UBYTE, netcdf.USHORT, netcdf.UINT, netcdf.INT64, netcdf.UINT64, netcdf.STRING:
+		return nil, fmt.Errorf("unsupported var type: %v", t)
+	default:
+		return nil, fmt.Errorf("unsupported var type: %v", t)
+	}
 }
 
 // transpose2D transposes a 2D array.
@@ -311,29 +437,8 @@ func read2DFloat64VarSubset(v netcdf.Var, startRow, startCol, nRows, nCols int) 
 		return nil, fmt.Errorf("unsupported data type: %v", varType)
 	}
 
-	// Apply scale_factor if present.
-	scaleAttr := v.Attr("scale_factor")
-	attrLen, err := scaleAttr.Len()
-	//nolint:nestif // NetCDF attribute handling requires nested conditionals.
-	if err == nil && attrLen > 0 {
-		var scaleVal float64
-		scaleData := make([]float64, 1)
-		err = scaleAttr.ReadFloat64s(scaleData)
-		if err == nil {
-			scaleVal = scaleData[0]
-		} else {
-			int32Data := make([]int32, 1)
-			err = scaleAttr.ReadInt32s(int32Data)
-			if err == nil {
-				scaleVal = float64(int32Data[0])
-			}
-		}
-		if err == nil && scaleVal != 0 {
-			for i := range flatData {
-				flatData[i] *= scaleVal
-			}
-		}
-	}
+	// Apply scale_factor and add_offset if present (packed data support).
+	applyScaleOffset(v, flatData)
 
 	// Convert to 2D array.
 	values := make([][]float64, nRows)
@@ -342,6 +447,50 @@ func read2DFloat64VarSubset(v netcdf.Var, startRow, startCol, nRows, nCols int) 
 	}
 
 	return values, nil
+}
+
+// applyScaleOffset unpacks values using the scale_factor and add_offset
+// attributes when present: true = packed*scale_factor + add_offset.
+func applyScaleOffset(v netcdf.Var, flatData []float64) {
+	if scale, ok := getAttrFloat(v, "scale_factor"); ok && scale != 0 {
+		for i := range flatData {
+			flatData[i] *= scale
+		}
+	}
+	if offset, ok := getAttrFloat(v, "add_offset"); ok && offset != 0 {
+		for i := range flatData {
+			flatData[i] += offset
+		}
+	}
+}
+
+// getAttrFloat reads a scalar numeric attribute as float64.
+func getAttrFloat(v netcdf.Var, name string) (float64, bool) {
+	a := v.Attr(name)
+	if a == (netcdf.Attr{}) {
+		return 0, false
+	}
+	n, err := a.Len()
+	if err != nil || n == 0 {
+		return 0, false
+	}
+	buf64 := make([]float64, 1)
+	if err := a.ReadFloat64s(buf64); err == nil {
+		return buf64[0], true
+	}
+	buf32 := make([]float32, 1)
+	if err := a.ReadFloat32s(buf32); err == nil {
+		return float64(buf32[0]), true
+	}
+	bufi := make([]int32, 1)
+	if err := a.ReadInt32s(bufi); err == nil {
+		return float64(bufi[0]), true
+	}
+	bufs := make([]int16, 1)
+	if err := a.ReadInt16s(bufs); err == nil {
+		return float64(bufs[0]), true
+	}
+	return 0, false
 }
 
 // findNearestIndex finds the index of the value closest to target in a sorted array.

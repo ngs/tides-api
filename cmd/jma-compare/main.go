@@ -63,6 +63,11 @@ func findTargetRecord(records []jma.HourlyRecord, dateStr string) ([]float64, er
 			for i := 0; i < 24; i++ {
 				if rec.Valid[i] {
 					hours[i] = rec.Hourly[i]
+				} else {
+					// Mark missing observations (JMA "999") as NaN so they
+					// are excluded from the comparison instead of being
+					// treated as a 0.0m tide height.
+					hours[i] = math.NaN()
 				}
 			}
 			return hours, nil
@@ -98,12 +103,19 @@ func compareData(hourly []float64, apiMap map[string]float64, startUTC string) (
 
 	diffs := make([]float64, 0, 24)
 	for i := 0; i < 24; i++ {
+		// Skip missing JMA observations; they must not enter the statistics.
+		if math.IsNaN(hourly[i]) {
+			continue
+		}
 		t := start.Add(time.Duration(i) * time.Hour).Format(time.RFC3339)
 		apiH, ok := apiMap[t]
 		if !ok {
 			return nil, fmt.Errorf("API missing time: %s", t)
 		}
 		diffs = append(diffs, hourly[i]-apiH)
+	}
+	if len(diffs) == 0 {
+		return nil, fmt.Errorf("no valid JMA observations to compare")
 	}
 	return diffs, nil
 }
@@ -134,18 +146,16 @@ func main() {
 		dateStr  string
 		apiURL   string
 		startUTC string
-		endUTC   string
 	)
 	flag.StringVar(&jmaPath, "jma_file", "", "Path or URL to JMA TXT (fixed-width)")
 	flag.StringVar(&station, "station", "KZ", "JMA station code (e.g., KZ)")
 	flag.StringVar(&dateStr, "date", "2025-10-27", "Target date in JST (YYYY-MM-DD)")
 	flag.StringVar(&apiURL, "api_url", "", "Full API URL to fetch predictions (must span the JST day; include params)")
 	flag.StringVar(&startUTC, "start_utc", "2025-10-26T15:00:00Z", "Start time in UTC matching JST 00:00")
-	flag.StringVar(&endUTC, "end_utc", "2025-10-27T15:00:00Z", "End time in UTC matching JST 24:00")
 	flag.Parse()
 
 	if jmaPath == "" || apiURL == "" {
-		fmt.Fprintln(os.Stderr, "Usage: jma-compare -jma_file <path|url> -station KZ -date 2025-10-27 -api_url <url> [-start_utc ... -end_utc ...]")
+		fmt.Fprintln(os.Stderr, "Usage: jma-compare -jma_file <path|url> -station KZ -date 2025-10-27 -api_url <url> [-start_utc ...]")
 		os.Exit(2)
 	}
 
@@ -185,4 +195,3 @@ func main() {
 	fmt.Printf("RMSE around mean [m]: %.3f\n", rmse)
 	fmt.Printf("\nRecommended datum_offset_m: %.3f\n", mean)
 }
-

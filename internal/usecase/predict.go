@@ -3,6 +3,8 @@ package usecase
 
 import (
 	"fmt"
+	"log"
+	"math"
 	"time"
 
 	"go.ngs.io/tides-api/internal/adapter/store"
@@ -64,7 +66,7 @@ type PredictionResponse struct {
 type PredictionPoint struct {
 	Time    string   `json:"time"`
 	HeightM float64  `json:"height_m"`          // Tide height relative to datum.
-	DepthM  *float64 `json:"depth_m,omitempty"` // Water depth at this time (seabed_depth + msl + height).
+	DepthM  *float64 `json:"depth_m,omitempty"` // Water depth at this time (seabed_depth + height; height already includes MSL).
 }
 
 // ExtremaResponse contains high and low tides.
@@ -155,7 +157,8 @@ func (uc *PredictionUseCase) Execute(req PredictionRequest) (*PredictionResponse
 	var source string
 	var err error
 
-	if req.StationID != nil {
+	// Match Validate: a pointer to an empty StationID is treated as absent.
+	if req.StationID != nil && *req.StationID != "" {
 		// Use CSV store for station-based queries.
 		source = sourceCSV
 		if req.Source == sourceFES {
@@ -184,8 +187,7 @@ func (uc *PredictionUseCase) Execute(req PredictionRequest) (*PredictionResponse
 		metadata, err = uc.bathymetryStore.GetMetadata(*req.Lat, *req.Lon)
 		if err != nil {
 			// Metadata is optional - log warning but continue.
-			// In production, use proper logging.
-			fmt.Printf("Warning: failed to load bathymetry metadata: %v\n", err)
+			log.Printf("Warning: failed to load bathymetry metadata: %v", err)
 		}
 	}
 
@@ -240,32 +242,32 @@ func (uc *PredictionUseCase) Execute(req PredictionRequest) (*PredictionResponse
 		PhaseConvention: phaseConv,
 	}
 
+	// Resolve output timezone before heavy computation so invalid values fail fast.
+	loc, tzLabel, err := resolveTimezone(req.Timezone, req.Start)
+	if err != nil {
+		return nil, err
+	}
+
 	// Generate predictions at requested interval.
 	predictions := domain.GeneratePredictions(req.Start, req.End, req.Interval, params)
 
 	// Compute extrema on high-resolution (1m) grid for accurate times regardless of interval.
+	// Cap the total number of high-resolution points (60 days at 1-minute resolution)
+	// to bound CPU cost for long time ranges; coarsen the grid beyond that.
+	const maxPrecisePoints = 86400
 	preciseInterval := time.Minute
 	if req.Interval < preciseInterval {
 		preciseInterval = req.Interval
 	}
+	if n := req.End.Sub(req.Start) / preciseInterval; n > maxPrecisePoints {
+		preciseInterval = req.End.Sub(req.Start) / maxPrecisePoints
+		// Keep the grid aligned to whole minutes.
+		if rem := preciseInterval % time.Minute; rem != 0 {
+			preciseInterval += time.Minute - rem
+		}
+	}
 	precisePredictions := domain.GeneratePredictions(req.Start, req.End, preciseInterval, params)
 	extrema := domain.RefineExtrema(precisePredictions, domain.FindExtrema(precisePredictions))
-
-	// Choose output timezone.
-	tz := req.Timezone
-	if tz == "" {
-		tz = "utc"
-	}
-	var loc *time.Location
-	var tzLabel string
-	switch tz {
-	case "jst", "JST":
-		loc = time.FixedZone("JST", 9*60*60)
-		tzLabel = "+09:00"
-	default:
-		loc = time.FixedZone("UTC", 0)
-		tzLabel = "+00:00"
-	}
 
 	// Convert to response format.
 	predictionPoints := make([]PredictionPoint, len(predictions))
@@ -276,9 +278,9 @@ func (uc *PredictionUseCase) Execute(req PredictionRequest) (*PredictionResponse
 		}
 
 		// Calculate water depth if seabed depth is available.
-		// Water depth = seabed_depth + msl + tide_height.
+		// Water depth = seabed_depth + tide_height (HeightM already includes MSL).
 		if metadata != nil && metadata.DepthM != nil {
-			waterDepth := *metadata.DepthM + msl + p.HeightM
+			waterDepth := *metadata.DepthM + p.HeightM
 			roundedDepth := roundToDecimal(waterDepth)
 			point.DepthM = &roundedDepth
 		}
@@ -295,7 +297,7 @@ func (uc *PredictionUseCase) Execute(req PredictionRequest) (*PredictionResponse
 
 		// Calculate water depth if seabed depth is available.
 		if metadata != nil && metadata.DepthM != nil {
-			waterDepth := *metadata.DepthM + msl + h.HeightM
+			waterDepth := *metadata.DepthM + h.HeightM
 			roundedDepth := roundToDecimal(waterDepth)
 			point.DepthM = &roundedDepth
 		}
@@ -312,7 +314,7 @@ func (uc *PredictionUseCase) Execute(req PredictionRequest) (*PredictionResponse
 
 		// Calculate water depth if seabed depth is available.
 		if metadata != nil && metadata.DepthM != nil {
-			waterDepth := *metadata.DepthM + msl + l.HeightM
+			waterDepth := *metadata.DepthM + l.HeightM
 			roundedDepth := roundToDecimal(waterDepth)
 			point.DepthM = &roundedDepth
 		}
@@ -402,8 +404,25 @@ func (uc *PredictionUseCase) GetBathymetry(lat, lon float64) (*domain.LocationMe
 	return metadata, nil
 }
 
-// Helper function to round to 3 decimal places.
+// Helper function to round to 3 decimal places (half away from zero).
 func roundToDecimal(val float64) float64 {
-	multiplier := 1000.0
-	return float64(int(val*multiplier+0.5)) / multiplier
+	const multiplier = 1000.0
+	return math.Round(val*multiplier) / multiplier
+}
+
+// resolveTimezone maps a requested timezone string to a *time.Location and an
+// offset label. An empty string defaults to UTC; unsupported values are an error.
+func resolveTimezone(tz string, at time.Time) (*time.Location, string, error) {
+	switch tz {
+	case "", "utc", "UTC":
+		return time.UTC, "+00:00", nil
+	case "jst", "JST":
+		return time.FixedZone("JST", 9*60*60), "+09:00", nil
+	default:
+		loc, err := time.LoadLocation(tz)
+		if err != nil {
+			return nil, "", fmt.Errorf("unsupported timezone %q: %w", tz, err)
+		}
+		return loc, at.In(loc).Format("-07:00"), nil
+	}
 }
