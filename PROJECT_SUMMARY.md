@@ -85,7 +85,7 @@ Returns tidal predictions for a time range with configurable intervals.
 - `station_id` (string) OR `lat`+`lon` (floats) - mutually exclusive
 - `start` (RFC3339) - start time
 - `end` (RFC3339) - end time
-- `interval` (duration, default: 10m)
+- `interval` (duration, default: 30m)
 - `datum` (string, default: MSL)
 - `source` (string, optional: csv|fes)
 
@@ -111,7 +111,7 @@ Returns tidal predictions for a time range with configurable intervals.
 ### 2. GET `/v1/constituents`
 Returns all available tidal constituents with angular speeds.
 
-### 3. GET `/healthz`
+### 3. GET `/health`
 Health check endpoint.
 
 ## Tidal Physics Implementation
@@ -119,14 +119,15 @@ Health check endpoint.
 ### Harmonic Analysis Formula
 
 ```
-η(t) = Σ f_k · A_k · cos(ω_k · Δt + φ_k - u_k) + MSL
+η(t) = Σ f_k · A_k · cos(ω_k · Δt + V_k + u_k - φ_k) + MSL
 ```
 
 - **A_k**: Amplitude (meters)
-- **φ_k**: Phase (degrees, Greenwich-referenced)
+- **φ_k**: Phase lag (degrees, Greenwich-referenced)
 - **ω_k**: Angular speed (degrees/hour)
-- **Δt**: Hours since Unix epoch (reference time)
-- **f_k, u_k**: Nodal corrections (identity in MVP)
+- **Δt**: Hours since the reference epoch (2012-01-01T00:00:00Z for FES)
+- **V_k**: Greenwich equilibrium argument at the reference epoch
+- **f_k, u_k**: Nodal corrections (Schureman 1958)
 
 ### Supported Constituents
 
@@ -163,7 +164,7 @@ $ make test
 
 1. **Health Check** ✅
 ```bash
-$ curl http://localhost:8080/healthz
+$ curl http://localhost:8080/health
 {"status":"ok","time":"2025-10-20T16:41:20Z"}
 ```
 

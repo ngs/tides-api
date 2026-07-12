@@ -298,7 +298,7 @@ docker build -t tides-api:test .
 docker run -d -p 8080:8080 --name tides-api-test tides-api:test
 
 # Test endpoints
-curl http://localhost:8080/healthz
+curl http://localhost:8080/health
 curl http://localhost:8080/v1/constituents
 curl 'http://localhost:8080/v1/tides/predictions?station_id=tokyo&start=2025-10-21T00:00:00Z&end=2025-10-21T12:00:00Z&interval=10m'
 
@@ -327,7 +327,7 @@ After deployment, workflows automatically test:
 
 1. **Health Endpoint**
    ```bash
-   curl https://tides-api-HASH-an.a.run.app/healthz
+   curl https://tides-api-HASH-an.a.run.app/health
    ```
 
 2. **Constituents Endpoint**
@@ -517,7 +517,7 @@ gcloud scheduler jobs create http tides-api-warmup \
   --location asia-northeast1 \
   --schedule "*/5 9-18 * * 1-5" \
   --time-zone "Asia/Tokyo" \
-  --uri "https://YOUR_SERVICE_URL/healthz" \
+  --uri "https://YOUR_SERVICE_URL/health" \
   --http-method GET
 ```
 
@@ -621,7 +621,7 @@ See [DEPLOYMENT.md](DEPLOYMENT.md) for detailed cost analysis.
 5. **Test deployed service:**
    ```bash
    SERVICE_URL=$(gcloud run services describe tides-api --region asia-northeast1 --format 'value(status.url)')
-   curl $SERVICE_URL/healthz
+   curl $SERVICE_URL/health
    ```
 
 ## Support

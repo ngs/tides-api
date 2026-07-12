@@ -13,3 +13,11 @@ FES data is provided by AVISO+ and requires separate registration and a license
 agreement.
 
 See: https://www.aviso.altimetry.fr/
+
+If using EOT20 tidal model data (a registration-free alternative), the
+following attribution applies:
+
+EOT20 - A global Empirical Ocean Tide model from multi-mission satellite
+altimetry. Hart-Davis, M.G., Piccioni, G., Dettmering, D. et al., DGFI-TUM.
+https://doi.org/10.17882/79489
+License: CC BY 4.0

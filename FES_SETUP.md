@@ -6,6 +6,8 @@ Complete guide for downloading and using FES2014 tidal model data with the Tide 
 
 FES (Finite Element Solution) 2014 is a high-resolution global tidal model developed by LEGOS, CNES, and CLS. The Tide API can use FES NetCDF data to provide accurate tidal predictions for any location worldwide.
 
+If you cannot (or do not want to) register with AVISO+, see [EOT20 (Registration-Free Alternative)](#eot20-registration-free-alternative) — a CC BY 4.0 licensed global tidal model that the same loader reads without any changes.
+
 ## Prerequisites
 
 ### 1. AVISO+ Account
@@ -34,7 +36,7 @@ sudo yum install lftp
 
 #### Option B: Using curl
 
-curl supports SFTP and is usually pre-installed on macOS/Linux.
+curl supports FTP and is usually pre-installed on macOS/Linux.
 
 ---
 
@@ -43,29 +45,29 @@ curl supports SFTP and is usually pre-installed on macOS/Linux.
 ### Step 1: Setup Credentials
 
 ```bash
-cd /Users/ngs/src/tides-api
+cd tides-api
 make fes-setup
 ```
 
-This will prompt for your AVISO username and password, then save them securely to `.fes_credentials` (git-ignored).
+This will prompt for your AVISO username and password, then save them securely to `.fes_credentials` (git-ignored). The Makefile passes the password to `lftp` through the `LFTP_PASSWORD` environment variable (`--env-password`), so it never appears on the command line or in `ps` output.
+
+> **No AVISO+ account?** See [EOT20 (registration-free alternative)](#eot20-registration-free-alternative) below.
 
 ### Step 2: Download FES Data
 
-**Option A: Download Major Constituents Only (Recommended for testing)**
+**Option A: Download the ocean tide archive (Recommended)**
 
 ```bash
-make fes-download-major
+make fes-download-major   # alias for fes-download-ocean-tide
 ```
 
-Downloads: M2, S2, K1, O1, N2, K2, P1, Q1 (~500MB, 5-10 minutes)
+Downloads `ocean_tide.tar.xz` (~1.9GB), verifies its checksum, and extracts all 34 constituents into `data/fes/`. `make fes-download-all` is the same alias.
 
-**Option B: Download All Constituents (Complete dataset)**
+**Option B: Download individual constituent files**
 
 ```bash
-make fes-download-all
+make fes-download-major-files   # M2, S2, K1, O1, N2, K2, P1, Q1 (per-file)
 ```
-
-Downloads: All 34 constituents (~5GB, 30+ minutes)
 
 ### Step 3: Verify Installation
 
@@ -105,17 +107,21 @@ make fes-setup              # Interactive credential setup
 # List files on AVISO server
 make fes-list
 
-# Download single constituent
-make fes-download-constituent CONST=m2
+# Download the full ocean tide archive (~1.9GB, all 34 constituents)
+make fes-download-ocean-tide
 
-# Download major constituents (M2, S2, K1, O1, N2, K2, P1, Q1)
+# Aliases for the archive download
 make fes-download-major
-
-# Download ALL constituents (~5GB)
 make fes-download-all
 
-# Download specific file using curl
-make fes-download-curl FILE=m2_amplitude.nc
+# Download single constituent (per-file)
+make fes-download-constituent CONST=m2
+
+# Download constituent groups (per-file, without the large archive)
+make fes-download-major-files    # M2, S2, K1, O1, N2, K2, P1, Q1
+make fes-download-shallow        # M4, MS4, MN4, M6, MK3, S4
+make fes-download-longperiod     # Mf, Mm, Ssa, Sa
+make fes-download-all-files      # All supported constituents
 ```
 
 ### Managing Data
@@ -140,20 +146,19 @@ If you prefer manual download or the Makefile doesn't work:
 ### Using lftp
 
 ```bash
-# Connect to AVISO server
-lftp -u YOUR_USERNAME,YOUR_PASSWORD sftp://ftp-access.aviso.altimetry.fr:2221
+# Connect to AVISO server (avoid typing the password into argv;
+# lftp reads it from the LFTP_PASSWORD environment variable)
+LFTP_PASSWORD='YOUR_PASSWORD' lftp --env-password -u YOUR_USERNAME \
+  ftp://ftp-access.aviso.altimetry.fr:21
 
 # Navigate to FES directory
-cd /auxiliary/tide_model/fes2014
+cd /auxiliary/tide_model/fes2014_elevations_and_load/fes2014b_elevations
 
 # List files
 ls
 
-# Download specific constituent
-mget m2*.nc -o ./data/fes/
-
-# Download all files
-mirror --continue --verbose --only-newer . ./data/fes/
+# Download the ocean tide archive
+get -c ocean_tide.tar.xz
 
 # Exit
 bye
@@ -164,22 +169,61 @@ bye
 ```bash
 # Download single file
 curl -u YOUR_USERNAME:YOUR_PASSWORD \
-  "sftp://ftp-access.aviso.altimetry.fr:2221/auxiliary/tide_model/fes2014/m2_amplitude.nc" \
-  -o "./data/fes/m2_amplitude.nc"
+  "ftp://ftp-access.aviso.altimetry.fr:21/auxiliary/tide_model/fes2014_elevations_and_load/fes2014b_elevations/ocean_tide.tar.xz" \
+  -o "./data/fes/ocean_tide.tar.xz"
 ```
 
-### Using GUI SFTP Client
+### Using GUI FTP Client
 
 1. **FileZilla / Cyberduck / WinSCP**
-   - Protocol: SFTP
+   - Protocol: FTP
    - Host: ftp-access.aviso.altimetry.fr
-   - Port: 2221
+   - Port: 21
    - Username: Your AVISO username
    - Password: Your AVISO password
 
-2. Navigate to: `/auxiliary/tide_model/fes2014/`
+2. Navigate to: `/auxiliary/tide_model/fes2014_elevations_and_load/fes2014b_elevations/`
 
 3. Download files to: `./data/fes/`
+
+---
+
+## EOT20 (Registration-Free Alternative)
+
+If you do not want to register with AVISO+, you can use **EOT20**, a global
+ocean tide model produced by DGFI-TUM. It is distributed under a **CC BY 4.0**
+license via SEANOE (https://doi.org/10.17882/79489) and can be downloaded
+directly, no account required:
+
+```bash
+curl -sfL --http1.1 -o eot20.zip "https://www.seanoe.org/data/00683/79489/data/85762.zip"
+unzip eot20.zip && unzip ocean_tides.zip -d extracted
+cd extracted/ocean_tides
+# Create lowercase symlinks so the loader picks the files up (e.g. M2_ocean_eot20.nc -> m2.nc)
+for f in *_ocean_eot20.nc; do c=$(echo "${f%%_ocean_eot20.nc}" | tr '[:upper:]' '[:lower:]'); ln -sf "$f" "$c.nc"; done
+FES_DIR=/path/to/extracted ./tides-api
+```
+
+Notes:
+
+- The download is ~2.33GB. The SEANOE server does not support HTTP range
+  requests and tends to drop HTTP/2 connections mid-transfer, so `--http1.1`
+  is recommended.
+- The NetCDF files store `amplitude` in centimeters and `phase` in degrees on
+  a 0..360 longitude axis. The loader reads them as-is: because the directory
+  name contains `ocean_tide`, the cm-to-m amplitude conversion is applied
+  automatically.
+- EOT20 provides 17 constituents: 2N2, J1, K1, K2, M2, M4, MF, MM, N2, O1,
+  P1, Q1, S1, S2, SA, SSA, T2.
+- Validated against JMA observations: RMSE of 2-3 cm at major Japanese
+  coastal stations.
+
+Attribution (CC BY 4.0):
+
+> Hart-Davis Michael, Piccioni Gaia, Dettmering Denise, Schwatke Christian,
+> Passaro Marcello, Seitz Florian (2021). EOT20 - A global Empirical Ocean
+> Tide model from multi-mission satellite altimetry. SEANOE.
+> https://doi.org/10.17882/79489
 
 ---
 
@@ -373,21 +417,16 @@ ncdump -h data/fes/m2_amplitude.nc | grep dimensions
 
 ### Performance Issues
 
-**Slow first request**
+**Memory usage**
 
-- First request loads all constituent grids into memory cache
-- Subsequent requests use cached grids
-- Loading 8 constituents takes ~5-10 seconds
-
-**Large memory usage**
-
-- Each constituent grid: ~45MB × 2 (amp + phase) = 90MB
-- 8 constituents: ~720MB
-- 34 constituents: ~3GB
+- The loader reads only a small subset of each NetCDF grid around the
+  requested location, so full grids are never held in memory (this keeps the
+  footprint small enough for constrained environments such as Cloud Run).
+- Each request re-reads the subset from disk; file path lookups are cached.
 
 Consider:
-- Only download constituents you need
-- Increase server memory for production
+- Only download constituents you need (per-file targets) to save disk space
+- Keep the NetCDF files on fast local storage
 
 ---
 
@@ -491,4 +530,4 @@ wait
 
 ---
 
-**Last Updated**: 2025-10-21
+**Last Updated**: 2026-07-12

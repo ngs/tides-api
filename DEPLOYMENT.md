@@ -155,7 +155,7 @@ gcloud scheduler jobs create http tides-api-warmup \
   --location asia-northeast1 \
   --schedule "*/5 9-18 * * 1-5" \
   --time-zone "Asia/Tokyo" \
-  --uri "https://YOUR_SERVICE_URL/healthz" \
+  --uri "https://YOUR_SERVICE_URL/health" \
   --http-method GET
 
 # Cost: ~$0.10/month (5000 free invocations/month, then $0.10 per million)
@@ -564,7 +564,7 @@ Example (min=0, 11.5MB FES, 1000 req/month):
 2. **Test API:**
    ```bash
    SERVICE_URL=$(gcloud run services describe tides-api-staging --region asia-northeast1 --format 'value(status.url)')
-   curl "${SERVICE_URL}/healthz"
+   curl "${SERVICE_URL}/health"
    curl "${SERVICE_URL}/v1/constituents"
    curl "${SERVICE_URL}/v1/tides/predictions?lat=35.6762&lon=139.6503&start=2025-10-21T00:00:00Z&end=2025-10-21T12:00:00Z&interval=10m"
    ```
