@@ -218,11 +218,20 @@ func (uc *PredictionUseCase) Execute(req PredictionRequest) (*PredictionResponse
 		msl = metadata.MSL
 	}
 
+	// Station overrides carry their own fitted datum offset, which
+	// applyStationOverride adds to msl below.
+	var hasOverride bool
+	if req.Lat != nil && req.Lon != nil {
+		_, hasOverride = getStationOverride(*req.Lat, *req.Lon)
+	}
+
 	// Apply optional datum offset (e.g., to align with JMA DL/TP).
 	if req.DatumOffsetM != nil {
 		msl += *req.DatumOffsetM
-	} else if req.Lat != nil && req.Lon != nil {
-		// Auto datum offset: attempt to load nearest known offset (e.g., JMA DL/TP) and apply.
+	} else if req.Lat != nil && req.Lon != nil && !hasOverride {
+		// Auto datum offset: apply the nearest known offset (e.g., JMA DL/TP),
+		// but only when no station override matches - the override's own
+		// datum offset comes from the same JMA fit and must not be added twice.
 		if off, ok := getAutoDatumOffset(*req.Lat, *req.Lon); ok {
 			msl += off
 		}
