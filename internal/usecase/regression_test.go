@@ -107,10 +107,14 @@ func TestRoundToDecimal_NegativeValues(t *testing.T) {
 		t.Errorf("roundToDecimal(-0.0006): expected -0.001, got %v", got)
 	}
 
-	// roundToDecimal(-1.2345) must be -1.234 or -1.235 (half away from zero: -1.235),
-	// never something farther off.
-	if got := roundToDecimal(-1.2345); math.Abs(got-(-1.234)) > 1e-12 && math.Abs(got-(-1.235)) > 1e-12 {
-		t.Errorf("roundToDecimal(-1.2345): expected -1.234 or -1.235, got %v", got)
+	// Inputs clearly on either side of the half-step have unambiguous results
+	// (an exact .5 half-step is not representable in binary floating point, so
+	// the boundary itself is not pinned).
+	if got := roundToDecimal(-1.2346); math.Abs(got-(-1.235)) > 1e-12 {
+		t.Errorf("roundToDecimal(-1.2346): expected -1.235, got %v", got)
+	}
+	if got := roundToDecimal(-1.2344); math.Abs(got-(-1.234)) > 1e-12 {
+		t.Errorf("roundToDecimal(-1.2344): expected -1.234, got %v", got)
 	}
 
 	// Sanity check: positive rounding half up.
