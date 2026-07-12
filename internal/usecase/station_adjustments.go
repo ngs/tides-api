@@ -119,18 +119,16 @@ func getStationOverride(lat, lon float64) (*stationOverrideEntry, bool) {
 	return best, true
 }
 
-func applyStationOverride(lat, lon float64, constituents []domain.ConstituentParam, msl *float64) []domain.ConstituentParam {
-	override, ok := getStationOverride(lat, lon)
-	if !ok {
+// applyOverrideConstituents replaces matching constituents (and appends
+// missing ones) from a station override. The override's datum offset is
+// handled by the caller, which uses it as the base MSL term.
+func applyOverrideConstituents(override *stationOverrideEntry, constituents []domain.ConstituentParam) []domain.ConstituentParam {
+	if override == nil {
 		return constituents
 	}
 
 	adjusted := make([]domain.ConstituentParam, len(constituents))
 	copy(adjusted, constituents)
-
-	if override.DatumOffset != nil && msl != nil {
-		*msl += *override.DatumOffset
-	}
 
 	index := make(map[string]int, len(adjusted))
 	for i, c := range adjusted {

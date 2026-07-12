@@ -218,17 +218,22 @@ func (uc *PredictionUseCase) Execute(req PredictionRequest) (*PredictionResponse
 		msl = metadata.MSL
 	}
 
-	// Station overrides carry their own fitted datum offset, which
-	// applyStationOverride adds to msl below.
-	var hasOverride bool
+	// A matching station override supplies the fitted constituents and its
+	// datum offset. The fitted intercept is the FULL constant term relative to
+	// the JMA datum (mean sea level above DL), so it replaces the model MSL
+	// rather than stacking on it.
+	var override *stationOverrideEntry
 	if req.Lat != nil && req.Lon != nil {
-		_, hasOverride = getStationOverride(*req.Lat, *req.Lon)
+		override, _ = getStationOverride(*req.Lat, *req.Lon)
+	}
+	if override != nil && override.DatumOffset != nil {
+		msl = *override.DatumOffset
 	}
 
 	// Apply optional datum offset (e.g., to align with JMA DL/TP).
 	if req.DatumOffsetM != nil {
 		msl += *req.DatumOffsetM
-	} else if req.Lat != nil && req.Lon != nil && !hasOverride {
+	} else if req.Lat != nil && req.Lon != nil && override == nil {
 		// Auto datum offset: apply the nearest known offset (e.g., JMA DL/TP),
 		// but only when no station override matches - the override's own
 		// datum offset comes from the same JMA fit and must not be added twice.
@@ -237,9 +242,7 @@ func (uc *PredictionUseCase) Execute(req PredictionRequest) (*PredictionResponse
 		}
 	}
 
-	if req.Lat != nil && req.Lon != nil {
-		constituents = applyStationOverride(*req.Lat, *req.Lon, constituents, &msl)
-	}
+	constituents = applyOverrideConstituents(override, constituents)
 
 	// Set longitude for Greenwich phase correction (only for lat/lon queries).
 	lon := 0.0
