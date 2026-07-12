@@ -51,7 +51,7 @@ func (h *Handler) GetPredictions(c *gin.Context) {
 	req := usecase.PredictionRequest{
 		Datum:           c.Query("datum"),
 		Source:          c.Query("source"),
-		Timezone:        c.Query("timezone"),         // "utc" (default) or "jst".
+		Timezone:        c.Query("timezone"),         // "utc" (default), "jst", or an IANA name (e.g. "Asia/Tokyo").
 		PhaseConvention: c.Query("phase_convention"), // "fes_greenwich" (default) or "vu"
 	}
 

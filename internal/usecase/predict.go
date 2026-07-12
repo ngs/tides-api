@@ -273,7 +273,7 @@ func (uc *PredictionUseCase) Execute(req PredictionRequest) (*PredictionResponse
 	}
 
 	// Resolve output timezone before heavy computation so invalid values fail fast.
-	loc, tzLabel, err := resolveTimezone(req.Timezone, req.Start)
+	loc, tzLabel, err := resolveTimezone(req.Timezone)
 	if err != nil {
 		return nil, err
 	}
@@ -440,9 +440,13 @@ func roundToDecimal(val float64) float64 {
 	return math.Round(val*multiplier) / multiplier
 }
 
-// resolveTimezone maps a requested timezone string to a *time.Location and an
-// offset label. An empty string defaults to UTC; unsupported values are an error.
-func resolveTimezone(tz string, at time.Time) (*time.Location, string, error) {
+// resolveTimezone maps a requested timezone string to a *time.Location and a
+// label for the response. An empty string defaults to UTC; unsupported values
+// are an error. Fixed zones are labeled with their offset; IANA zones are
+// labeled with their identifier, because a single offset would be misleading
+// for ranges that cross a DST transition (the per-point RFC3339 timestamps
+// carry the actual offsets).
+func resolveTimezone(tz string) (*time.Location, string, error) {
 	switch tz {
 	case "", "utc", "UTC":
 		return time.UTC, "+00:00", nil
@@ -453,6 +457,6 @@ func resolveTimezone(tz string, at time.Time) (*time.Location, string, error) {
 		if err != nil {
 			return nil, "", fmt.Errorf("%w: unsupported timezone %q", ErrValidation, tz)
 		}
-		return loc, at.In(loc).Format("-07:00"), nil
+		return loc, tz, nil
 	}
 }
