@@ -512,77 +512,6 @@ func readFloat64Var(v netcdf.Var) ([]float64, error) {
 	return data, nil
 }
 
-// read2DFloat64Var reads a 2D float64 array from a NetCDF variable.
-// Supports float64, float32, int32, and int16 types, with optional scale_factor.
-func read2DFloat64Var(v netcdf.Var, nRows, nCols int) ([][]float64, error) {
-	// Get variable type.
-	varType, err := v.Type()
-	if err != nil {
-		return nil, fmt.Errorf("failed to get variable type: %w", err)
-	}
-
-	var flatData []float64
-	totalSize := nRows * nCols
-
-	// Read data based on type.
-	switch varType {
-	case netcdf.DOUBLE:
-		flatData = make([]float64, totalSize)
-		err = v.ReadFloat64s(flatData)
-		if err != nil {
-			return nil, fmt.Errorf("failed to read float64: %w", err)
-		}
-	case netcdf.FLOAT:
-		// Read as float32 and convert to float64.
-		float32Data := make([]float32, totalSize)
-		err = v.ReadFloat32s(float32Data)
-		if err != nil {
-			return nil, fmt.Errorf("failed to read float32: %w", err)
-		}
-		flatData = make([]float64, totalSize)
-		for i, val := range float32Data {
-			flatData[i] = float64(val)
-		}
-	case netcdf.SHORT:
-		// Read as int16 and convert to float64.
-		int16Data := make([]int16, totalSize)
-		err = v.ReadInt16s(int16Data)
-		if err != nil {
-			return nil, fmt.Errorf("failed to read int16: %w", err)
-		}
-		// Convert int16 to float64.
-		flatData = make([]float64, totalSize)
-		for i, val := range int16Data {
-			flatData[i] = float64(val)
-		}
-	case netcdf.INT:
-		// Read as int32 and convert to float64.
-		int32Data := make([]int32, totalSize)
-		err = v.ReadInt32s(int32Data)
-		if err != nil {
-			return nil, fmt.Errorf("failed to read int32: %w", err)
-		}
-		// Convert int32 to float64.
-		flatData = make([]float64, totalSize)
-		for i, val := range int32Data {
-			flatData[i] = float64(val)
-		}
-	case netcdf.BYTE, netcdf.UBYTE, netcdf.CHAR, netcdf.USHORT, netcdf.UINT, netcdf.INT64, netcdf.UINT64, netcdf.STRING:
-		return nil, fmt.Errorf("unsupported data type: %v (expected DOUBLE, FLOAT, INT, or SHORT)", varType)
-	}
-
-	// Apply scale_factor and add_offset if present (packed data support).
-	applyScaleOffset(v, flatData)
-
-	// Convert to 2D array.
-	values := make([][]float64, nRows)
-	for i := 0; i < nRows; i++ {
-		values[i] = flatData[i*nCols : (i+1)*nCols]
-	}
-
-	return values, nil
-}
-
 // applyScaleOffset unpacks values using the scale_factor and add_offset
 // attributes when present: true = packed*scale_factor + add_offset.
 func applyScaleOffset(v netcdf.Var, flatData []float64) {
@@ -629,7 +558,7 @@ func getAttrFloat(v netcdf.Var, name string) (float64, bool) {
 
 // read2DFloat64VarSubset reads a subset of a 2D float64 array from a NetCDF variable.
 // Reads data starting at [startRow, startCol] with dimensions [nRows, nCols].
-// Supports the same data types as read2DFloat64Var.
+// Supports float64, float32, int32, and int16 types, with optional scale_factor/add_offset.
 func read2DFloat64VarSubset(v netcdf.Var, startRow, startCol, nRows, nCols int) ([][]float64, error) {
 	// Get variable type.
 	varType, err := v.Type()

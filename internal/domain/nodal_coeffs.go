@@ -136,6 +136,7 @@ func LoadNodalCoeffSetFromEnv() (*NodalCoeffSet, error) {
 		// Try default path
 		path = "data/astro_coeffs.json"
 	}
+	//nolint:gosec // G703: Path comes from the operator-controlled ASTRO_COEFFS_PATH env var, not user input.
 	if _, err := os.Stat(path); err != nil {
 		return nil, err
 	}

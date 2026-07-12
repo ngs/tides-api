@@ -5,6 +5,7 @@ package ncio
 
 import "sync"
 
+//nolint:gochecknoglobals // Intentional: process-wide lock guarding non-thread-safe libnetcdf.
 var mu sync.Mutex
 
 // Lock acquires the global NetCDF I/O lock.

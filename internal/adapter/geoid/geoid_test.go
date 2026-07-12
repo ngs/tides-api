@@ -103,9 +103,7 @@ func TestGetGeoidHeight_NormalizesNegativeLongitudeOn360Axis(t *testing.T) {
 	values := make([][]float64, len(latVals))
 	for i := range latVals {
 		values[i] = make([]float64, len(lonVals))
-		for j, lo := range lonVals {
-			values[i][j] = lo
-		}
+		copy(values[i], lonVals)
 	}
 	dir := t.TempDir()
 	path := filepath.Join(dir, "egm2008_360.nc")

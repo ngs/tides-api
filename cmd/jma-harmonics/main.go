@@ -90,7 +90,7 @@ func main() {
 		os.Exit(1)
 	}
 
-	intercept, overrides, err := fitHarmonics(samples, lon, constituents)
+	intercept, overrides, err := fitHarmonics(samples, constituents)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "fit failed: %v\n", err)
 		os.Exit(1)
@@ -185,7 +185,7 @@ func parseConstituents(csv string) []string {
 	return out
 }
 
-func fitHarmonics(samples []sample, lon float64, names []string) (float64, []overrideConstituent, error) {
+func fitHarmonics(samples []sample, names []string) (float64, []overrideConstituent, error) {
 	speeds := make([]float64, len(names))
 	for i, name := range names {
 		speed, ok := domain.GetConstituentSpeed(name)

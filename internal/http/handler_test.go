@@ -15,7 +15,11 @@ import (
 	"go.ngs.io/tides-api/internal/usecase"
 )
 
-const testCSVContent = "constituent,amplitude_m,phase_deg\nM2,0.5,30.0\n"
+const (
+	testCSVContent = "constituent,amplitude_m,phase_deg\nM2,0.5,30.0\n"
+	testStart      = "2025-10-27T00:00:00Z"
+	testEnd        = "2025-10-28T00:00:00Z"
+)
 
 // newTestEnv builds a prediction use case backed by a real CSV store rooted
 // at a temp directory. Layout:
@@ -69,7 +73,7 @@ func newTestRouter(t *testing.T) *gin.Engine {
 
 func doGet(t *testing.T, r *gin.Engine, rawQuery string) *httptest.ResponseRecorder {
 	t.Helper()
-	req := httptest.NewRequest(nethttp.MethodGet, "/v1/tides/predictions?"+rawQuery, nethttp.NoBody)
+	req := httptest.NewRequestWithContext(t.Context(), nethttp.MethodGet, "/v1/tides/predictions?"+rawQuery, nethttp.NoBody)
 	w := httptest.NewRecorder()
 	r.ServeHTTP(w, req)
 	return w
@@ -85,8 +89,8 @@ func TestGetPredictions_StationIDPathTraversalRejected(t *testing.T) {
 	r := newTestRouter(t)
 
 	timeParams := url.Values{
-		"start": {"2025-10-27T00:00:00Z"},
-		"end":   {"2025-10-28T00:00:00Z"},
+		paramStart: {testStart},
+		paramEnd:   {testEnd},
 	}
 
 	cases := []struct {
@@ -139,8 +143,8 @@ func TestGetPredictions_InternalErrorNotExposedAsBadRequest(t *testing.T) {
 
 	q := url.Values{
 		"station_id": {"nosuchstation"},
-		"start":      {"2025-10-27T00:00:00Z"},
-		"end":        {"2025-10-28T00:00:00Z"},
+		paramStart:   {testStart},
+		paramEnd:     {testEnd},
 	}
 	w := doGet(t, r, q.Encode())
 
@@ -174,9 +178,9 @@ func TestGetPredictions_LatWithoutLonRejectedExplicitly(t *testing.T) {
 
 	t.Run("lat only with start/end", func(t *testing.T) {
 		q := url.Values{
-			"lat":   {"35.6"},
-			"start": {"2025-10-27T00:00:00Z"},
-			"end":   {"2025-10-28T00:00:00Z"},
+			paramLat:   {"35.6"},
+			paramStart: {testStart},
+			paramEnd:   {testEnd},
 		}
 		w := doGet(t, r, q.Encode())
 		body := w.Body.String()
@@ -195,7 +199,7 @@ func TestGetPredictions_LatWithoutLonRejectedExplicitly(t *testing.T) {
 	})
 
 	t.Run("lat only without start/end", func(t *testing.T) {
-		q := url.Values{"lat": {"35.6"}}
+		q := url.Values{paramLat: {"35.6"}}
 		w := doGet(t, r, q.Encode())
 		body := w.Body.String()
 

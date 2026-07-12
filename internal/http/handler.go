@@ -20,6 +20,19 @@ import (
 // against the data directory.
 var stationIDPattern = regexp.MustCompile(`^[A-Za-z0-9_-]+$`)
 
+// Query parameter / response field names shared across handlers.
+const (
+	paramLat   = "lat"
+	paramLon   = "lon"
+	paramStart = "start"
+	paramEnd   = "end"
+)
+
+// errorJSON builds the standard error response body.
+func errorJSON(msg string) gin.H {
+	return gin.H{"error": msg}
+}
+
 // Handler handles HTTP requests for tide predictions.
 type Handler struct {
 	predictionUC *usecase.PredictionUseCase
@@ -34,145 +47,33 @@ func NewHandler(predictionUC *usecase.PredictionUseCase) *Handler {
 
 // GetPredictions handles GET /v1/tides/predictions.
 func (h *Handler) GetPredictions(c *gin.Context) {
-	// Parse query parameters.
-	latStr := c.Query("lat")
-	lonStr := c.Query("lon")
-	stationID := c.Query("station_id")
-	startStr := c.Query("start")
-	endStr := c.Query("end")
-	intervalStr := c.Query("interval")
-	datum := c.Query("datum")
-	source := c.Query("source")
-	timezone := c.Query("timezone") // "utc" (default) or "jst".
-	datumOffsetStr := c.Query("datum_offset_m")
-	phaseConv := c.Query("phase_convention") // "fes_greenwich" (default) or "vu"
-
-	// Build request.
 	req := usecase.PredictionRequest{
-		Datum:    datum,
-		Source:   source,
-		Timezone: timezone,
-	}
-	if phaseConv != "" {
-		req.PhaseConvention = phaseConv
+		Datum:           c.Query("datum"),
+		Source:          c.Query("source"),
+		Timezone:        c.Query("timezone"),         // "utc" (default) or "jst".
+		PhaseConvention: c.Query("phase_convention"), // "fes_greenwich" (default) or "vu"
 	}
 
-	// Reject partial lat/lon pairs explicitly instead of silently ignoring them.
-	if latStr != "" && lonStr == "" {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "latitude and longitude must both be provided (lon is missing)"})
+	if !parseLocation(c, &req) || !parseTimeRange(c, &req) || !parseIntervalAndOffset(c, &req) {
 		return
-	}
-	if lonStr != "" && latStr == "" {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "latitude and longitude must both be provided (lat is missing)"})
-		return
-	}
-
-	// Parse lat/lon.
-	if latStr != "" && lonStr != "" {
-		lat, err := strconv.ParseFloat(latStr, 64)
-		if err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"error": fmt.Sprintf("invalid latitude: %v", err)})
-			return
-		}
-		lon, err := strconv.ParseFloat(lonStr, 64)
-		if err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"error": fmt.Sprintf("invalid longitude: %v", err)})
-			return
-		}
-		req.Lat = &lat
-		req.Lon = &lon
-	}
-
-	// Parse station ID. Validate before it can ever reach file access.
-	if stationID != "" {
-		if !stationIDPattern.MatchString(stationID) {
-			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid station_id: only alphanumeric characters, hyphens and underscores are allowed"})
-			return
-		}
-		req.StationID = &stationID
-	}
-
-	// Parse time range. If missing and lat/lon provided, default to local (resolved) current day 00:00-24:00.
-	//nolint:nestif // Time range parsing with multiple default scenarios.
-	if startStr == "" && endStr == "" && req.Lat != nil && req.Lon != nil {
-		// Resolve simple timezone: JST for Japan bounding box, otherwise UTC.
-		loc, tzCode := resolveTimezoneForLatLon(*req.Lat, *req.Lon)
-		if timezone == "" {
-			req.Timezone = tzCode
-		}
-		nowLocal := time.Now().In(loc)
-		y, m, d := nowLocal.Date()
-		startLocal := time.Date(y, m, d, 0, 0, 0, 0, loc)
-		endLocal := startLocal.Add(24 * time.Hour)
-		req.Start = startLocal.UTC()
-		req.End = endLocal.UTC()
-	} else {
-		if startStr == "" {
-			c.JSON(http.StatusBadRequest, gin.H{"error": "start parameter is required"})
-			return
-		}
-		if endStr == "" {
-			c.JSON(http.StatusBadRequest, gin.H{"error": "end parameter is required"})
-			return
-		}
-		start, err := time.Parse(time.RFC3339, startStr)
-		if err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"error": fmt.Sprintf("invalid start time (expected RFC3339): %v", err)})
-			return
-		}
-		end, err := time.Parse(time.RFC3339, endStr)
-		if err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"error": fmt.Sprintf("invalid end time (expected RFC3339): %v", err)})
-			return
-		}
-		req.Start = start.UTC()
-		req.End = end.UTC()
-	}
-
-	// If timezone not provided but lat/lon present, set output TZ based on coordinates (always-on).
-	if req.Timezone == "" && req.Lat != nil && req.Lon != nil {
-		_, tzCode := resolveTimezoneForLatLon(*req.Lat, *req.Lon)
-		req.Timezone = tzCode
-	}
-
-	// Parse interval (default: 30m for better readability).
-	if intervalStr == "" {
-		intervalStr = "30m"
-	}
-
-	interval, err := time.ParseDuration(intervalStr)
-	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": fmt.Sprintf("invalid interval: %v", err)})
-		return
-	}
-	req.Interval = interval
-
-	// Parse optional datum offset.
-	if datumOffsetStr != "" {
-		off, err := strconv.ParseFloat(datumOffsetStr, 64)
-		if err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"error": fmt.Sprintf("invalid datum_offset_m: %v", err)})
-			return
-		}
-		req.DatumOffsetM = &off
 	}
 
 	// Validate the request up front so client errors are reported as 400
 	// with a meaningful message. Execute also validates internally, but by
 	// validating here we can treat any later Execute failure as internal.
 	if err := req.Validate(); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		c.JSON(http.StatusBadRequest, errorJSON(err.Error()))
 		return
 	}
 
 	// Source/identifier combination checks mirrored from the use case so
 	// they surface as 400 instead of opaque internal errors.
 	if req.StationID != nil && req.Source == "fes" {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "FES source does not support station_id - use lat/lon instead"})
+		c.JSON(http.StatusBadRequest, errorJSON("FES source does not support station_id - use lat/lon instead"))
 		return
 	}
 	if req.Lat != nil && req.Lon != nil && req.Source == "csv" {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "CSV source does not support lat/lon - use station_id instead"})
+		c.JSON(http.StatusBadRequest, errorJSON("CSV source does not support lat/lon - use station_id instead"))
 		return
 	}
 
@@ -182,11 +83,130 @@ func (h *Handler) GetPredictions(c *gin.Context) {
 	response, err := h.predictionUC.Execute(req)
 	if err != nil {
 		log.Printf("prediction execute failed: %v", err)
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "internal server error"})
+		c.JSON(http.StatusInternalServerError, errorJSON("internal server error"))
 		return
 	}
 
 	c.JSON(http.StatusOK, response)
+}
+
+// parseLocation fills lat/lon and station_id on req. It writes a 400 response
+// and returns false on invalid input.
+func parseLocation(c *gin.Context, req *usecase.PredictionRequest) bool {
+	latStr := c.Query(paramLat)
+	lonStr := c.Query(paramLon)
+	stationID := c.Query("station_id")
+
+	// Reject partial lat/lon pairs explicitly instead of silently ignoring them.
+	if latStr != "" && lonStr == "" {
+		c.JSON(http.StatusBadRequest, errorJSON("latitude and longitude must both be provided (lon is missing)"))
+		return false
+	}
+	if lonStr != "" && latStr == "" {
+		c.JSON(http.StatusBadRequest, errorJSON("latitude and longitude must both be provided (lat is missing)"))
+		return false
+	}
+
+	if latStr != "" && lonStr != "" {
+		lat, err := strconv.ParseFloat(latStr, 64)
+		if err != nil {
+			c.JSON(http.StatusBadRequest, errorJSON(fmt.Sprintf("invalid latitude: %v", err)))
+			return false
+		}
+		lon, err := strconv.ParseFloat(lonStr, 64)
+		if err != nil {
+			c.JSON(http.StatusBadRequest, errorJSON(fmt.Sprintf("invalid longitude: %v", err)))
+			return false
+		}
+		req.Lat = &lat
+		req.Lon = &lon
+	}
+
+	// Validate station ID before it can ever reach file access.
+	if stationID != "" {
+		if !stationIDPattern.MatchString(stationID) {
+			c.JSON(http.StatusBadRequest, errorJSON("invalid station_id: only alphanumeric characters, hyphens and underscores are allowed"))
+			return false
+		}
+		req.StationID = &stationID
+	}
+	return true
+}
+
+// parseTimeRange fills Start/End (and a coordinate-derived Timezone) on req.
+// It writes a 400 response and returns false on invalid input.
+func parseTimeRange(c *gin.Context, req *usecase.PredictionRequest) bool {
+	startStr := c.Query(paramStart)
+	endStr := c.Query(paramEnd)
+
+	// If missing and lat/lon provided, default to local (resolved) current day 00:00-24:00.
+	if startStr == "" && endStr == "" && req.Lat != nil && req.Lon != nil {
+		// Resolve simple timezone: JST for Japan bounding box, otherwise UTC.
+		loc, tzCode := resolveTimezoneForLatLon(*req.Lat, *req.Lon)
+		if req.Timezone == "" {
+			req.Timezone = tzCode
+		}
+		nowLocal := time.Now().In(loc)
+		y, m, d := nowLocal.Date()
+		startLocal := time.Date(y, m, d, 0, 0, 0, 0, loc)
+		req.Start = startLocal.UTC()
+		req.End = startLocal.Add(24 * time.Hour).UTC()
+		return true
+	}
+
+	if startStr == "" {
+		c.JSON(http.StatusBadRequest, errorJSON("start parameter is required"))
+		return false
+	}
+	if endStr == "" {
+		c.JSON(http.StatusBadRequest, errorJSON("end parameter is required"))
+		return false
+	}
+	start, err := time.Parse(time.RFC3339, startStr)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, errorJSON(fmt.Sprintf("invalid start time (expected RFC3339): %v", err)))
+		return false
+	}
+	end, err := time.Parse(time.RFC3339, endStr)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, errorJSON(fmt.Sprintf("invalid end time (expected RFC3339): %v", err)))
+		return false
+	}
+	req.Start = start.UTC()
+	req.End = end.UTC()
+
+	// If timezone not provided but lat/lon present, set output TZ based on coordinates (always-on).
+	if req.Timezone == "" && req.Lat != nil && req.Lon != nil {
+		_, tzCode := resolveTimezoneForLatLon(*req.Lat, *req.Lon)
+		req.Timezone = tzCode
+	}
+	return true
+}
+
+// parseIntervalAndOffset fills Interval and DatumOffsetM on req. It writes a
+// 400 response and returns false on invalid input.
+func parseIntervalAndOffset(c *gin.Context, req *usecase.PredictionRequest) bool {
+	// Parse interval (default: 30m for better readability).
+	intervalStr := c.Query("interval")
+	if intervalStr == "" {
+		intervalStr = "30m"
+	}
+	interval, err := time.ParseDuration(intervalStr)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, errorJSON(fmt.Sprintf("invalid interval: %v", err)))
+		return false
+	}
+	req.Interval = interval
+
+	if datumOffsetStr := c.Query("datum_offset_m"); datumOffsetStr != "" {
+		off, err := strconv.ParseFloat(datumOffsetStr, 64)
+		if err != nil {
+			c.JSON(http.StatusBadRequest, errorJSON(fmt.Sprintf("invalid datum_offset_m: %v", err)))
+			return false
+		}
+		req.DatumOffsetM = &off
+	}
+	return true
 }
 
 // resolveTimezoneForLatLon returns a best-effort location and label based on lat/lon.
@@ -258,48 +278,48 @@ func (h *Handler) GetConstituentsList(c *gin.Context) {
 // GetBathymetry handles GET /v1/bathymetry.
 func (h *Handler) GetBathymetry(c *gin.Context) {
 	// Parse query parameters.
-	latStr := c.Query("lat")
-	lonStr := c.Query("lon")
+	latStr := c.Query(paramLat)
+	lonStr := c.Query(paramLon)
 
 	if latStr == "" || lonStr == "" {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "lat and lon parameters are required"})
+		c.JSON(http.StatusBadRequest, errorJSON("lat and lon parameters are required"))
 		return
 	}
 
 	lat, err := strconv.ParseFloat(latStr, 64)
 	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": fmt.Sprintf("invalid latitude: %v", err)})
+		c.JSON(http.StatusBadRequest, errorJSON(fmt.Sprintf("invalid latitude: %v", err)))
 		return
 	}
 
 	lon, err := strconv.ParseFloat(lonStr, 64)
 	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": fmt.Sprintf("invalid longitude: %v", err)})
+		c.JSON(http.StatusBadRequest, errorJSON(fmt.Sprintf("invalid longitude: %v", err)))
 		return
 	}
 
 	// Validate ranges.
 	if lat < -90 || lat > 90 {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "latitude must be between -90 and 90"})
+		c.JSON(http.StatusBadRequest, errorJSON("latitude must be between -90 and 90"))
 		return
 	}
 	if lon < -180 || lon > 180 {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "longitude must be between -180 and 180"})
+		c.JSON(http.StatusBadRequest, errorJSON("longitude must be between -180 and 180"))
 		return
 	}
 
 	// Get bathymetry data.
 	metadata, err := h.predictionUC.GetBathymetry(lat, lon)
 	if err != nil {
-		c.JSON(http.StatusNotFound, gin.H{"error": err.Error()})
+		c.JSON(http.StatusNotFound, errorJSON(err.Error()))
 		return
 	}
 
 	// Build response.
 	response := gin.H{
 		"location": gin.H{
-			"lat": lat,
-			"lon": lon,
+			paramLat: lat,
+			paramLon: lon,
 		},
 		"msl_m":      metadata.MSL,
 		"datum_name": metadata.DatumName,

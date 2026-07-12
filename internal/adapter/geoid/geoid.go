@@ -131,40 +131,15 @@ func (s *Store) loadGrid(targetLat, targetLon float64) error {
 	defer func() { _ = nc.Close() }()
 
 	// Try common variable names for geoid grids.
-	latNames := []string{"lat", "latitude", "y"}
-	lonNames := []string{"lon", "longitude", "x"}
 	dataNames := []string{"geoid", "geoid_height", "N", "height", "z"}
 
-	// Read latitude.
-	var latData []float64
-	var latFound bool
-	for _, name := range latNames {
-		if v, err := nc.Var(name); err == nil {
-			latData, err = readFloat64Var(v)
-			if err == nil {
-				latFound = true
-				break
-			}
-		}
+	latData, err := readCoordVar(nc, "latitude", []string{"lat", "latitude", "y"})
+	if err != nil {
+		return err
 	}
-	if !latFound {
-		return fmt.Errorf("latitude variable not found (tried: %v)", latNames)
-	}
-
-	// Read longitude.
-	var lonData []float64
-	var lonFound bool
-	for _, name := range lonNames {
-		if v, err := nc.Var(name); err == nil {
-			lonData, err = readFloat64Var(v)
-			if err == nil {
-				lonFound = true
-				break
-			}
-		}
-	}
-	if !lonFound {
-		return fmt.Errorf("longitude variable not found (tried: %v)", lonNames)
+	lonData, err := readCoordVar(nc, "longitude", []string{"lon", "longitude", "x"})
+	if err != nil {
+		return err
 	}
 
 	// Calculate subset indices with ±2 degree margin.
@@ -281,6 +256,18 @@ func (s *Store) loadGrid(targetLat, targetLon float64) error {
 	s.bounds = boundsFromGrid(grid)
 
 	return nil
+}
+
+// readCoordVar reads a 1D coordinate variable, trying the given names in order.
+func readCoordVar(nc netcdf.Dataset, kind string, names []string) ([]float64, error) {
+	for _, name := range names {
+		if v, err := nc.Var(name); err == nil {
+			if data, err := readFloat64Var(v); err == nil {
+				return data, nil
+			}
+		}
+	}
+	return nil, fmt.Errorf("%s variable not found (tried: %v)", kind, names)
 }
 
 // readFloat64Var reads a 1D float64 array from a NetCDF variable.

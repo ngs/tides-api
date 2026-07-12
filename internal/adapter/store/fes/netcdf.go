@@ -19,7 +19,9 @@ import (
 )
 
 const (
-	amplitudeVarName = "amplitude"
+	amplitudeVarName  = "amplitude"
+	defaultLatVarName = "lat"
+	defaultLonVarName = "lon"
 )
 
 // Store provides access to FES2014/2022 NetCDF tidal constituent data.
@@ -55,8 +57,8 @@ func DefaultConfig() FileConfig {
 	return FileConfig{
 		AmplitudePattern: "{constituent}_amplitude.nc",
 		PhasePattern:     "{constituent}_phase.nc",
-		LatVarName:       "lat",
-		LonVarName:       "lon",
+		LatVarName:       defaultLatVarName,
+		LonVarName:       defaultLonVarName,
 		AmplitudeVarName: amplitudeVarName,
 		PhaseVarName:     "phase",
 	}
@@ -329,6 +331,7 @@ func (s *Store) interpolateConstituentAtPoint(name string, lat, lon float64) (am
 }
 
 // loadConstituent loads amplitude and phase grids for a constituent.
+//
 // Deprecated: Loads entire grids into memory. Use interpolateConstituentAtPoint instead.
 func (s *Store) loadConstituent(name string) (*Grid, error) {
 	// Check cache first.
@@ -413,8 +416,8 @@ func interpolatePointFromNetCDF(filepath, latVarName, lonVarName, dataVarName st
 	defer func() { _ = nc.Close() }()
 
 	// Try multiple variable name patterns.
-	latNames := []string{latVarName, "latitude", "lat", "y"}
-	lonNames := []string{lonVarName, "longitude", "lon", "x"}
+	latNames := []string{latVarName, "latitude", defaultLatVarName, "y"}
+	lonNames := []string{lonVarName, "longitude", defaultLonVarName, "x"}
 
 	// Read full coordinate arrays (these are small: 1D arrays of ~2881 and ~5760 points).
 	var latData []float64
@@ -845,8 +848,8 @@ func loadNetCDFGrid(filepath, latVarName, lonVarName, dataVarName string) (*inte
 	defer func() { _ = nc.Close() }()
 
 	// Try multiple variable name patterns.
-	latNames := []string{latVarName, "latitude", "lat", "y"}
-	lonNames := []string{lonVarName, "longitude", "lon", "x"}
+	latNames := []string{latVarName, "latitude", defaultLatVarName, "y"}
+	lonNames := []string{lonVarName, "longitude", defaultLonVarName, "x"}
 
 	// Build candidate data variable names. Expand to include common FES names.
 	lower := strings.ToLower(dataVarName)

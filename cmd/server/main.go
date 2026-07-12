@@ -116,6 +116,14 @@ func main() {
 		IdleTimeout:       120 * time.Second,
 	}
 
+	if err := serve(srv); err != nil {
+		log.Fatalf("Failed to start server: %v", err)
+	}
+}
+
+// serve runs the server until it fails or a shutdown signal arrives,
+// then drains connections gracefully.
+func serve(srv *http.Server) error {
 	// Shut down gracefully on SIGINT/SIGTERM.
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
@@ -128,7 +136,7 @@ func main() {
 	select {
 	case err := <-errCh:
 		if err != nil && !errors.Is(err, http.ErrServerClosed) {
-			log.Fatalf("Failed to start server: %v", err)
+			return err
 		}
 	case <-ctx.Done():
 		log.Printf("Shutdown signal received, draining connections...")
@@ -139,6 +147,7 @@ func main() {
 		}
 		log.Printf("Server stopped")
 	}
+	return nil
 }
 
 // getEnv retrieves an environment variable or returns a default value.

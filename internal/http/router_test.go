@@ -32,7 +32,7 @@ func TestSetupRouter_CORSAllowedOriginsTrimmed(t *testing.T) {
 		t.Helper()
 
 		// Preflight request.
-		req := httptest.NewRequest(nethttp.MethodOptions, "/health", nethttp.NoBody)
+		req := httptest.NewRequestWithContext(t.Context(), nethttp.MethodOptions, "/health", nethttp.NoBody)
 		req.Header.Set("Origin", origin)
 		req.Header.Set("Access-Control-Request-Method", nethttp.MethodGet)
 		w := httptest.NewRecorder()
@@ -44,7 +44,7 @@ func TestSetupRouter_CORSAllowedOriginsTrimmed(t *testing.T) {
 		}
 
 		// Simple GET request.
-		req = httptest.NewRequest(nethttp.MethodGet, "/health", nethttp.NoBody)
+		req = httptest.NewRequestWithContext(t.Context(), nethttp.MethodGet, "/health", nethttp.NoBody)
 		req.Header.Set("Origin", origin)
 		w = httptest.NewRecorder()
 		router.ServeHTTP(w, req)
