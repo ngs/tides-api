@@ -24,7 +24,7 @@ Open a new terminal and try these commands:
 
 ### Health Check
 ```bash
-curl http://localhost:8080/healthz
+curl http://localhost:8080/health
 ```
 
 Expected response:
@@ -128,7 +128,7 @@ make docker-build
 make docker-run
 
 # Test the containerized API
-curl http://localhost:8080/healthz
+curl http://localhost:8080/health
 ```
 
 ## Common Issues

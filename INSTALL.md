@@ -102,7 +102,7 @@ make docker-build
 make docker-run
 
 # Test
-curl http://localhost:8080/healthz
+curl http://localhost:8080/health
 ```
 
 ---
@@ -149,7 +149,7 @@ make run
 
 ```bash
 # In another terminal
-curl http://localhost:8080/healthz
+curl http://localhost:8080/health
 
 # Expected: {"status":"ok", "time":"..."}
 ```

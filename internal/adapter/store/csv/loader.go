@@ -3,13 +3,20 @@ package csv
 
 import (
 	"encoding/csv"
+	"errors"
 	"fmt"
+	"io"
 	"os"
+	"regexp"
 	"strconv"
 	"strings"
 
 	"go.ngs.io/tides-api/internal/domain"
 )
+
+// stationIDPattern restricts station IDs to alphanumerics, hyphens, and
+// underscores, preventing path traversal via the CSV file path.
+var stationIDPattern = regexp.MustCompile(`^[A-Za-z0-9_-]+$`)
 
 // ConstituentStore provides access to tidal constituent data.
 type ConstituentStore struct {
@@ -25,6 +32,11 @@ func NewConstituentStore(dataDir string) *ConstituentStore {
 
 // LoadForStation loads constituent parameters for a named station.
 func (s *ConstituentStore) LoadForStation(stationID string) ([]domain.ConstituentParam, error) {
+	// Validate stationID to prevent path traversal (only alphanumerics, "-", "_").
+	if !stationIDPattern.MatchString(stationID) {
+		return nil, fmt.Errorf("invalid station ID %q: only alphanumeric characters, hyphens, and underscores are allowed", stationID)
+	}
+
 	// Construct file path.
 	filename := fmt.Sprintf("%s/mock_%s_constituents.csv", s.dataDir, strings.ToLower(stationID))
 
@@ -63,7 +75,7 @@ func (s *ConstituentStore) LoadForStation(stationID string) ([]domain.Constituen
 		record, err := reader.Read()
 		if err != nil {
 			// EOF is expected.
-			if err.Error() == "EOF" {
+			if errors.Is(err, io.EOF) {
 				break
 			}
 			return nil, fmt.Errorf("failed to read CSV record: %w", err)

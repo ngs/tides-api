@@ -3,6 +3,14 @@ package domain
 
 import "math"
 
+// Named constants for constituents referenced in multiple places.
+const (
+	constMK3 = "MK3"
+	constMN4 = "MN4"
+	constMS4 = "MS4"
+	constSsa = "Ssa"
+)
+
 // Constituent represents a tidal constituent with its angular speed.
 type Constituent struct {
 	Name          string  // E.g., "M2", "S2", "K1", "O1".
@@ -41,29 +49,33 @@ var StandardConstituents = map[string]float64{
 	"Q1": 13.3986609,
 
 	// Shallow water constituents.
-	"M4":  57.9682084,
-	"M6":  86.9523127,
-	"MK3": 44.0251729,
-	"S4":  60.0000000,
-	"MN4": 57.4238337,
-	"MS4": 58.9841042,
+	"M4":     57.9682084,
+	"M6":     86.9523127,
+	constMK3: 44.0251729,
+	"S4":     60.0000000,
+	constMN4: 57.4238337,
+	constMS4: 58.9841042,
 
 	// Long period.
-	"Mf":  1.0980331,
-	"Mm":  0.5443747,
-	"Ssa": 0.0821373,
-	"Sa":  0.0410686,
+	"Mf":     1.0980331,
+	"Mm":     0.5443747,
+	constSsa: 0.0821373,
+	"Sa":     0.0410686,
 }
 
 // NodalCorrection is an interface for applying nodal corrections.
-// MVP: returns identity (1.0, 0.0).
+// The time argument t is the absolute time expressed as hours since the Unix
+// epoch (1970-01-01 00:00:00 UTC); nodal corrections depend only on absolute
+// time, never on a prediction-specific reference epoch.
 type NodalCorrection interface {
-    // GetFactors returns the amplitude factor (f) and phase correction (u) in degrees.
-    GetFactors(constituent string, t float64) (f float64, u float64)
-    // GetEquilibriumArgument returns the equilibrium argument V (degrees) for the constituent.
-    // V accounts for slowly varying astronomical arguments (Schureman/Foreman).
-    // Implementations may return 0 if not available.
-    GetEquilibriumArgument(constituent string, t float64) float64
+	// GetFactors returns the amplitude factor (f) and phase correction (u) in degrees
+	// at absolute time t (hours since Unix epoch).
+	GetFactors(constituent string, t float64) (f float64, u float64)
+	// GetEquilibriumArgument returns the equilibrium argument V (degrees) for the constituent
+	// at absolute time t (hours since Unix epoch).
+	// V accounts for slowly varying astronomical arguments (Schureman/Foreman).
+	// Implementations may return 0 if not available.
+	GetEquilibriumArgument(constituent string, t float64) float64
 }
 
 // IdentityNodalCorrection is a dummy implementation that returns no correction.
@@ -71,12 +83,12 @@ type IdentityNodalCorrection struct{}
 
 // GetFactors returns the nodal correction factors (no correction for identity).
 func (i *IdentityNodalCorrection) GetFactors(_ string, _ float64) (float64, float64) {
-    return 1.0, 0.0
+	return 1.0, 0.0
 }
 
 // GetEquilibriumArgument returns the equilibrium argument (no correction for identity).
 func (i *IdentityNodalCorrection) GetEquilibriumArgument(_ string, _ float64) float64 {
-    return 0.0
+	return 0.0
 }
 
 // GetConstituentSpeed returns the angular speed for a given constituent name.

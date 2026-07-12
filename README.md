@@ -13,7 +13,7 @@ A high-performance tidal prediction API written in Go, providing harmonic tidal 
   - JMA hourly data calibration for Japanese ports
 - **Flexible Configuration**: Datum offsets, timezone selection, and phase conventions
 - **Clean Architecture**: Hexagonal architecture with clear separation of concerns
-- **Production Ready**: Docker support, comprehensive tests, and monitoring
+- **Production Ready**: Docker support, graceful shutdown on SIGINT/SIGTERM, comprehensive tests, and monitoring
 - **RESTful API**: Simple JSON API with ISO8601 timestamps
 
 ## Quick Start
@@ -63,19 +63,25 @@ make docker-run
 
 | Parameter | Type | Required | Description | Example |
 |-----------|------|----------|-------------|---------|
-| `station_id` | string | * | Station identifier | `tokyo` |
+| `station_id` | string | * | Station identifier (alphanumeric, hyphens and underscores only) | `tokyo` |
 | `lat` | float | * | Latitude (-90 to 90) | `35.6762` |
 | `lon` | float | * | Longitude (-180 to 180) | `139.6503` |
 | `start` | string | Yes | Start time (RFC3339) | `2025-10-21T00:00:00Z` |
 | `end` | string | Yes | End time (RFC3339) | `2025-10-21T12:00:00Z` |
-| `interval` | string | No | Time interval (default: 10m) | `10m`, `1h` |
+| `interval` | string | No | Time interval (default: 30m) | `10m`, `1h` |
 | `datum` | string | No | Vertical datum (default: MSL) | `MSL`, `LAT` |
 | `source` | string | No | Data source (auto-detect) | `csv`, `fes` |
 | `datum_offset_m` | float | No | Constant vertical offset [m] applied to all predicted heights | `0.768` |
-| `timezone` | string | No | Output timezone for timestamps | `utc`, `jst` |
+| `timezone` | string | No | Output timezone: `utc`, `jst`, or an IANA name | `utc`, `jst`, `Asia/Tokyo` |
 | `phase_convention` | string | No | Phase convention (`fes_greenwich` default, or `vu`) | `fes_greenwich`, `vu` |
 
 \* Either `station_id` OR `lat`+`lon` must be provided (mutually exclusive)
+
+Notes:
+
+- `lat` and `lon` must both be provided; supplying only one returns `400` with `"latitude and longitude must both be provided"`.
+- `source=fes` cannot be combined with `station_id`, and `source=csv` cannot be combined with `lat`/`lon` (both return `400`).
+- An unrecognized `timezone` value returns `400`.
 
 **Example Request**:
 
@@ -111,6 +117,16 @@ curl 'http://localhost:8080/v1/tides/predictions?station_id=tokyo&start=2025-10-
 }
 ```
 
+**Error Responses**:
+
+Errors are returned as `{"error": "<message>"}` with one of the following status codes:
+
+| Status | Meaning | Example message |
+|--------|---------|-----------------|
+| `400` | Validation error (bad or missing parameters, partial lat/lon pair, invalid `station_id` characters, invalid `timezone`, invalid `source` combination) | `latitude and longitude must both be provided (lon is missing)` |
+| `404` | Unknown station | `no data for station "xxx"` |
+| `500` | Internal error (details are logged server-side, never returned to clients) | `internal server error` |
+
 ### 2. Get Constituents
 
 **Endpoint**: `GET /v1/constituents`
@@ -141,14 +157,14 @@ curl http://localhost:8080/v1/constituents
 
 ### 3. Health Check
 
-**Endpoint**: `GET /healthz`
+**Endpoint**: `GET /health`
 
 Returns server health status.
 
 **Example Request**:
 
 ```bash
-curl http://localhost:8080/healthz
+curl http://localhost:8080/health
 ```
 
 **Example Response**:
@@ -211,12 +227,16 @@ curl 'http://localhost:8080/v1/tides/predictions?lat=35.6762&lon=139.6503&start=
 **Features:**
 - ✅ Full NetCDF file reading
 - ✅ Bilinear interpolation for any lat/lon
-- ✅ Automatic grid caching
+- ✅ Subset loading around the requested point (grids are not cached in memory, keeping the footprint small)
 - ✅ Support for multiple file naming conventions
 - ✅ Automatic constituent detection
 
+**No AVISO+ account?** The EOT20 global tidal model (DGFI-TUM, CC BY 4.0) can be
+downloaded without registration and works with the same loader. See the
+"EOT20" section in [FES_SETUP.md](FES_SETUP.md).
+
 **Documentation:**
-- [FES_SETUP.md](FES_SETUP.md) - Complete FES setup guide
+- [FES_SETUP.md](FES_SETUP.md) - Complete FES setup guide (including the EOT20 alternative)
 - [INSTALL.md](INSTALL.md) - Installation instructions for NetCDF library
 
 ### JMA Calibration & Station Overrides
@@ -247,8 +267,31 @@ go run ./cmd/jma-overrides \
   -datum_out data/jma_datum_offsets.json
 ```
 
-  `cmd/jma-overrides` は必要なら `tmp/bin/jma-harmonics` を自動ビルドし、全コード分を順次フィットします。
+  `cmd/jma-overrides` は必要なら `tmp/bin/jma-harmonics` を自動ビルドし、全コード分を順次フィットします。`-stations` に渡す駅メタデータ JSON（`code`/`lat`/`lng` の配列）は、既存の overrides JSON から次のように生成できます:
+
+```bash
+jq '[.[] | {code: .station, lat: (.lat|tostring), lng: (.lon|tostring)}]' \
+  data/jma_station_overrides.json > tmp/jma-stations.json
+```
+
 4. 個別に調整したい場合は `cmd/jma-harmonics` を直接叩いて JSON を追記できます。`data/jma_datum_offsets.json` も同じコマンドで併せて再生成されます。
+5. フィット済みオーバーライドの検証には `cmd/jma-validate` を使います。JMA の時別値（`tmp/jma_txt/{CODE}.txt`）と突き合わせ、駅ごとの RMSE を出力します:
+
+```bash
+go run ./cmd/jma-validate \
+  -overrides data/jma_station_overrides.json \
+  -txt_dir tmp/jma_txt \
+  -max_mean_rmse 0.12   # CI 用: 平均 RMSE がこの値 [m] を超えたら非ゼロ終了 (0 で無効)
+```
+
+  現在の基準値: 239 駅で平均 RMSE 約 10.5 cm、最良は KZ (木更津) の約 3.7 cm。
+
+> **Important**: The harmonic constants in the overrides are fitted against the
+> basis `θ = ω·Δt + V(2012-01-01) + u(t) − φ` (Greenwich equilibrium argument
+> `V` evaluated at the reference epoch 2012-01-01T00:00:00Z, plus nodal `u`).
+> If you change the `V` implementation or the reference epoch, the fitted
+> phases become invalid — you must re-fit all overrides with `cmd/jma-overrides`
+> and re-check them with `cmd/jma-validate`.
 
 Environment variables:
 
@@ -270,6 +313,7 @@ tides-api/
 │   ├── jma-harmonics/       # JMA harmonic analysis tool
 │   ├── jma-compare/         # JMA vs API comparison tool
 │   ├── jma-overrides/       # Batch JMA station processor
+│   ├── jma-validate/        # Validate fitted overrides against JMA hourly data
 │   └── fes-generator/       # FES NetCDF test data generator
 ├── internal/
 │   ├── domain/              # Core business logic
@@ -396,16 +440,22 @@ Environment variables (see `.env.example`):
 Tide height is calculated using:
 
 ```
-η(t) = Σ f_k · A_k · cos(ω_k · Δt + φ_k - u_k) + MSL + datum_offset
+η(t) = Σ f_k · A_k · cos(ω_k · Δt + V_k + u_k - φ_k) + MSL + datum_offset
 ```
 
 Where:
 - `A_k`: Amplitude of constituent k (meters)
-- `φ_k`: Greenwich phase (degrees)
+- `φ_k`: Greenwich phase lag (degrees)
 - `ω_k`: Angular speed (degrees/hour)
+- `Δt`: Time elapsed since the reference epoch (2012-01-01T00:00:00Z for FES)
+- `V_k`: Greenwich equilibrium argument evaluated at the reference epoch
 - `f_k`, `u_k`: Nodal corrections computed from astronomical arguments (Schureman 1958)
 - `MSL`: Mean Sea Level offset
 - `datum_offset`: Optional vertical datum adjustment (e.g., for JMA calibration)
+
+The fitted JMA station overrides depend on this exact basis
+(`θ = ω·Δt + V(2012-01-01) + u(t) − φ`); changing `V` or the reference epoch
+requires re-fitting them (see the JMA calibration section above).
 
 ### Supported Constituents
 
@@ -440,7 +490,7 @@ High and low tides are detected using:
 - [x] Astronomical arguments (V0+u)
 - [x] JMA hourly data calibration and harmonic fitting
 - [x] Datum offset support for vertical adjustments
-- [x] Custom timezone support (UTC/JST)
+- [x] Custom timezone support (UTC/JST/IANA names)
 - [x] Phase convention options (FES Greenwich / V+u)
 - [x] Automatic longitude wrapping for NetCDF grids
 - [x] Complex-valued constituent support (Re/Im pairs)

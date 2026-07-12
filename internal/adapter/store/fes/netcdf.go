@@ -4,6 +4,7 @@ package fes
 import (
 	"fmt"
 	"io/fs"
+	"log"
 	"math"
 	"os"
 	"path/filepath"
@@ -13,18 +14,22 @@ import (
 	"github.com/fhs/go-netcdf/netcdf"
 
 	"go.ngs.io/tides-api/internal/adapter/interp"
+	"go.ngs.io/tides-api/internal/adapter/ncio"
 	"go.ngs.io/tides-api/internal/domain"
 )
 
 const (
-	amplitudeVarName = "amplitude"
+	amplitudeVarName  = "amplitude"
+	defaultLatVarName = "lat"
+	defaultLonVarName = "lon"
 )
 
 // Store provides access to FES2014/2022 NetCDF tidal constituent data.
 type Store struct {
-	dataDir string
-	cache   map[string]*Grid // Cache loaded grids.
-	mu      sync.RWMutex     // Protect cache.
+	dataDir   string
+	cache     map[string]*Grid // Cache loaded grids.
+	mu        sync.RWMutex     // Protect cache.
+	fileCache sync.Map         // Cache findFirstFile lookups: file name -> resolved path ("" = not found).
 }
 
 // Grid holds amplitude and phase grids for a constituent.
@@ -52,8 +57,8 @@ func DefaultConfig() FileConfig {
 	return FileConfig{
 		AmplitudePattern: "{constituent}_amplitude.nc",
 		PhasePattern:     "{constituent}_phase.nc",
-		LatVarName:       "lat",
-		LonVarName:       "lon",
+		LatVarName:       defaultLatVarName,
+		LonVarName:       defaultLonVarName,
 		AmplitudeVarName: amplitudeVarName,
 		PhaseVarName:     "phase",
 	}
@@ -115,7 +120,8 @@ func (s *Store) LoadForLocation(lat, lon float64) ([]domain.ConstituentParam, er
 		// Each request reads only the 4 grid points needed for bilinear interpolation.
 		amplitude, phase, err := s.interpolateConstituentAtPoint(constName, lat, lon)
 		if err != nil {
-			// Skip constituents that fail to load (log warning in production).
+			// Skip constituents that fail to load, but log so failures are visible.
+			log.Printf("warning: skipping FES constituent %s at (%.4f, %.4f): %v", constName, lat, lon, err)
 			continue
 		}
 
@@ -233,8 +239,14 @@ func (s *Store) GetAvailableConstituents() ([]string, error) {
 
 // findFirstFile searches for the first matching file from a list of candidates.
 // It performs a case-insensitive search under the given base directory.
+// Results are cached per store to avoid repeated directory walks.
 func (s *Store) findFirstFile(candidates []string) (string, error) {
 	findByName := func(target string) (string, bool, error) {
+		key := strings.ToLower(target)
+		if cached, ok := s.fileCache.Load(key); ok {
+			path, _ := cached.(string)
+			return path, path != "", nil
+		}
 		var match string
 		var found bool
 		err := filepath.WalkDir(s.dataDir, func(path string, d fs.DirEntry, err error) error {
@@ -254,6 +266,7 @@ func (s *Store) findFirstFile(candidates []string) (string, error) {
 		if err != nil {
 			return "", false, err
 		}
+		s.fileCache.Store(key, match)
 		return match, found, nil
 	}
 
@@ -309,13 +322,16 @@ func (s *Store) interpolateConstituentAtPoint(name string, lat, lon float64) (am
 		return 0, 0, fmt.Errorf("failed to interpolate phase: %w", err)
 	}
 
-	// Convert cm to meters.
+	// Convert cm to meters. FES amplitude grids store centimeters; this is the
+	// single place where the unit conversion happens for the point-interpolation
+	// path (interpolatePointFromNetCDF returns raw grid units).
 	amplitude /= 100.0
 
 	return amplitude, phase, nil
 }
 
 // loadConstituent loads amplitude and phase grids for a constituent.
+//
 // Deprecated: Loads entire grids into memory. Use interpolateConstituentAtPoint instead.
 func (s *Store) loadConstituent(name string) (*Grid, error) {
 	// Check cache first.
@@ -381,8 +397,17 @@ func (s *Store) loadConstituent(name string) (*Grid, error) {
 // interpolatePointFromNetCDF reads only 4 grid points around (lat, lon) and interpolates.
 // This minimizes memory usage by avoiding loading entire grids.
 //
+// The returned value is in raw grid units (no cm->m conversion is applied here;
+// the caller is responsible for unit conversion). Fill-value points are excluded
+// from the interpolation by renormalizing the bilinear weights, and phase values
+// are interpolated circularly (via sin/cos) to handle the 0/360 discontinuity.
+//
 //nolint:gocyclo,nestif // Complex NetCDF subset reading logic with multiple fallback paths.
 func interpolatePointFromNetCDF(filepath, latVarName, lonVarName, dataVarName string, lat, lon float64) (float64, error) {
+	// libnetcdf is not thread-safe: serialize the whole open-read-close sequence.
+	ncio.Lock()
+	defer ncio.Unlock()
+
 	// Open NetCDF file.
 	nc, err := netcdf.OpenFile(filepath, netcdf.NOWRITE)
 	if err != nil {
@@ -391,8 +416,8 @@ func interpolatePointFromNetCDF(filepath, latVarName, lonVarName, dataVarName st
 	defer func() { _ = nc.Close() }()
 
 	// Try multiple variable name patterns.
-	latNames := []string{latVarName, "latitude", "lat", "y"}
-	lonNames := []string{lonVarName, "longitude", "lon", "x"}
+	latNames := []string{latVarName, "latitude", defaultLatVarName, "y"}
+	lonNames := []string{lonVarName, "longitude", defaultLonVarName, "x"}
 
 	// Read full coordinate arrays (these are small: 1D arrays of ~2881 and ~5760 points).
 	var latData []float64
@@ -425,27 +450,65 @@ func interpolatePointFromNetCDF(filepath, latVarName, lonVarName, dataVarName st
 		return 0, fmt.Errorf("longitude variable not found (tried: %v)", lonNames)
 	}
 
+	// Normalize the query longitude to the grid axis convention.
+	if len(lonData) > 0 && lonData[0] < 0 {
+		// -180..180 style axis.
+		lon = normalizeLon360(lon)
+		if lon > 180 {
+			lon -= 360
+		}
+	} else {
+		// 0..360 style axis.
+		lon = normalizeLon360(lon)
+	}
+
 	// Find grid cell indices surrounding the target point.
 	// latData and lonData should be monotonically increasing.
 	latIdx := findGridCell(latData, lat)
-	lonIdx := findGridCell(lonData, lon)
-
-	if latIdx < 0 || lonIdx < 0 {
+	if latIdx < 0 {
 		return 0, fmt.Errorf("point (%.4f, %.4f) outside grid bounds", lat, lon)
 	}
 
+	// Find the longitude cell, wrapping across the seam that connects the last
+	// and first grid columns for global grids.
+	nLon := len(lonData)
+	lonIdxA, lonIdxB := -1, -1
+	var lonEdges []float64
+	if idx := findGridCell(lonData, lon); idx >= 0 {
+		lonIdxA, lonIdxB = idx, idx+1
+		lonEdges = []float64{lonData[idx], lonData[idx+1]}
+	} else if nLon >= 2 && lonData[nLon-1]-lonData[0] > 180 {
+		// Global axis: the point falls in the wrap-around cell between the
+		// last column and the first column (shifted by +360).
+		l := lon
+		if l < lonData[0] {
+			l += 360
+		}
+		if l >= lonData[nLon-1] && l <= lonData[0]+360 {
+			lonIdxA, lonIdxB = nLon-1, 0
+			lonEdges = []float64{lonData[nLon-1], lonData[0] + 360}
+			lon = l
+		}
+	}
+	if lonIdxA < 0 {
+		return 0, fmt.Errorf("point (%.4f, %.4f) outside grid bounds", lat, lon)
+	}
+	latEdges := latData[latIdx : latIdx+2]
+
 	// Build candidate data variable names.
 	lower := strings.ToLower(dataVarName)
+	isAmp := strings.Contains(lower, "amp") || lower == amplitudeVarName
+	isPhase := strings.Contains(lower, "pha")
 	dataNames := []string{}
 	if dataVarName != "" {
 		dataNames = append(dataNames, dataVarName)
 	}
-	if strings.Contains(lower, "amp") || strings.Contains(lower, "ampl") {
+	if isAmp {
 		dataNames = append(dataNames,
 			"amplitude", "Amplitude", "amp", "Amp",
 			"HA", "Ha", "ha", "H", "h",
 		)
-	} else if strings.Contains(lower, "pha") || strings.Contains(lower, "phase") {
+	} else if isPhase {
 		dataNames = append(dataNames,
 			"phase", "Phase", "pha", "Pha",
 			"Hg", "HG", "hg", "g", "G",
@@ -489,98 +552,68 @@ func interpolatePointFromNetCDF(filepath, latVarName, lonVarName, dataVarName st
 			return 0, fmt.Errorf("data variable not found (tried: %v), and no complex pair detected", dataNames)
 		}
 
-		// Read 2x2 subset from real and imag.
-		reVals, err := readSubset2x2(realVar, len(latData), len(lonData), latIdx, lonIdx)
+		// Read 2x2 subset from real and imag (fill values become NaN).
+		reVals, err := readSubsetPoints(realVar, len(latData), nLon, latIdx, lonIdxA, lonIdxB)
 		if err != nil {
 			return 0, fmt.Errorf("failed to read real subset: %w", err)
 		}
-		imVals, err := readSubset2x2(imagVar, len(latData), len(lonData), latIdx, lonIdx)
+		imVals, err := readSubsetPoints(imagVar, len(latData), nLon, latIdx, lonIdxA, lonIdxB)
 		if err != nil {
 			return 0, fmt.Errorf("failed to read imag subset: %w", err)
 		}
 
-		// Handle fill values.
-		if fv, ok := getFillValue(realVar); ok {
-			for i := range reVals {
-				for j := range reVals[i] {
-					if reVals[i][j] == fv {
-						reVals[i][j] = 0
-					}
-				}
-			}
+		// Interpolate the real and imaginary components first, then derive
+		// amplitude or phase. This keeps phase interpolation circular.
+		reI, errRe := bilinearInterpolateValid(latEdges, lonEdges, reVals, lat, lon)
+		imI, errIm := bilinearInterpolateValid(latEdges, lonEdges, imVals, lat, lon)
+		if errRe != nil || errIm != nil {
+			return 0, fmt.Errorf("no valid grid points around (%.4f, %.4f)", lat, lon)
 		}
-		if fv, ok := getFillValue(imagVar); ok {
-			for i := range imVals {
-				for j := range imVals[i] {
-					if imVals[i][j] == fv {
-						imVals[i][j] = 0
-					}
-				}
-			}
+		if isAmp {
+			return math.Hypot(reI, imI), nil
 		}
-
-		// Compute amplitude or phase.
-		want := strings.ToLower(dataVarName)
-		values := make([][]float64, 2)
-		for i := 0; i < 2; i++ {
-			values[i] = make([]float64, 2)
-			for j := 0; j < 2; j++ {
-				re := reVals[i][j]
-				im := imVals[i][j]
-				if strings.Contains(want, "amp") || strings.Contains(want, "ampl") || want == amplitudeVarName {
-					values[i][j] = math.Hypot(re, im)
-				} else {
-					deg := domain.Rad2Deg(math.Atan2(im, re))
-					if deg < 0 {
-						deg += 360.0
-					}
-					values[i][j] = deg
-				}
-			}
+		deg := domain.Rad2Deg(math.Atan2(imI, reI))
+		if deg < 0 {
+			deg += 360.0
 		}
-
-		// Apply cm->m conversion for amplitude from ocean_tide combined files.
-		if (strings.Contains(want, "amp") || want == amplitudeVarName) && strings.Contains(strings.ToLower(filepath), "ocean_tide") {
-			for i := range values {
-				for j := range values[i] {
-					values[i][j] /= 100.0
-				}
-			}
-		}
-
-		// Bilinear interpolation.
-		return bilinearInterpolate(latData[latIdx:latIdx+2], lonData[lonIdx:lonIdx+2], values, lat, lon), nil
+		return deg, nil
 	}
 
-	// Read 2x2 subset from data variable.
-	values, err := readSubset2x2(dataVar, len(latData), len(lonData), latIdx, lonIdx)
+	// Read 2x2 subset from data variable (fill values become NaN).
+	values, err := readSubsetPoints(dataVar, len(latData), nLon, latIdx, lonIdxA, lonIdxB)
 	if err != nil {
 		return 0, fmt.Errorf("failed to read data subset: %w", err)
 	}
 
-	// Handle fill values.
-	if fv, ok := getFillValue(dataVar); ok {
-		for i := range values {
-			for j := range values[i] {
-				if values[i][j] == fv {
-					values[i][j] = 0
-				}
+	if isPhase {
+		// Interpolate phase circularly: decompose into sin/cos, interpolate
+		// each component, then reassemble with atan2. This handles the 0/360
+		// discontinuity (e.g. 359 and 1 interpolate to ~0, not 180).
+		sinVals := make([][]float64, 2)
+		cosVals := make([][]float64, 2)
+		for i := 0; i < 2; i++ {
+			sinVals[i] = make([]float64, 2)
+			cosVals[i] = make([]float64, 2)
+			for j := 0; j < 2; j++ {
+				rad := domain.Deg2Rad(values[i][j]) // NaN propagates.
+				sinVals[i][j] = math.Sin(rad)
+				cosVals[i][j] = math.Cos(rad)
 			}
 		}
-	}
-
-	// Unit conversion for amplitude grids.
-	if (strings.Contains(strings.ToLower(dataVarName), "amp") || strings.ToLower(dataVarName) == amplitudeVarName) &&
-		strings.Contains(strings.ToLower(filepath), "ocean_tide") {
-		for i := range values {
-			for j := range values[i] {
-				values[i][j] /= 100.0
-			}
+		sinI, errS := bilinearInterpolateValid(latEdges, lonEdges, sinVals, lat, lon)
+		cosI, errC := bilinearInterpolateValid(latEdges, lonEdges, cosVals, lat, lon)
+		if errS != nil || errC != nil {
+			return 0, fmt.Errorf("no valid grid points around (%.4f, %.4f)", lat, lon)
 		}
+		deg := domain.Rad2Deg(math.Atan2(sinI, cosI))
+		if deg < 0 {
+			deg += 360.0
+		}
+		return deg, nil
 	}
 
-	// Bilinear interpolation.
-	return bilinearInterpolate(latData[latIdx:latIdx+2], lonData[lonIdx:lonIdx+2], values, lat, lon), nil
+	// Bilinear interpolation excluding fill (NaN) points.
+	return bilinearInterpolateValid(latEdges, lonEdges, values, lat, lon)
 }
 
 // findGridCell finds the index of the grid cell containing the given coordinate value.
@@ -611,14 +644,16 @@ func findGridCell(coords []float64, val float64) int {
 	return left
 }
 
-// readSubset2x2 reads a 2x2 subset from a NetCDF variable.
-// It reads data[latIdx:latIdx+2, lonIdx:lonIdx+2].
-//
-//nolint:nestif // Type checking for NetCDF variable requires nested switch.
-func readSubset2x2(v netcdf.Var, nLat, nLon, latIdx, lonIdx int) ([][]float64, error) {
+// readSubsetPoints reads a 2x2 set of grid points from a NetCDF variable:
+// rows latIdx and latIdx+1, columns lonIdxA and lonIdxB. The two longitude
+// columns need not be adjacent (this supports wrap-around interpolation where
+// the cell spans the last and first grid columns). Fill values are returned
+// as NaN and packed (scale_factor/add_offset) values are unpacked.
+func readSubsetPoints(v netcdf.Var, nLat, nLon, latIdx, lonIdxA, lonIdxB int) ([][]float64, error) {
 	// Verify indices are valid.
-	if latIdx < 0 || latIdx >= nLat-1 || lonIdx < 0 || lonIdx >= nLon-1 {
-		return nil, fmt.Errorf("invalid indices: latIdx=%d, lonIdx=%d, nLat=%d, nLon=%d", latIdx, lonIdx, nLat, nLon)
+	if latIdx < 0 || latIdx >= nLat-1 || lonIdxA < 0 || lonIdxA >= nLon || lonIdxB < 0 || lonIdxB >= nLon {
+		return nil, fmt.Errorf("invalid indices: latIdx=%d, lonIdxA=%d, lonIdxB=%d, nLat=%d, nLon=%d",
+			latIdx, lonIdxA, lonIdxB, nLat, nLon)
 	}
 
 	// Check dimensions to determine if data is [lat, lon] or [lon, lat].
@@ -639,48 +674,51 @@ func readSubset2x2(v netcdf.Var, nLat, nLon, latIdx, lonIdx int) ([][]float64, e
 		return nil, fmt.Errorf("failed to get dim1 length: %w", err)
 	}
 
-	// Determine dimension order and read subset.
-	var flat []float64
-	var needTranspose bool
-
+	var latFirst bool
 	type dimPair struct{ d0, d1 uint64 }
 	switch (dimPair{dim0Len, dim1Len}) {
 	case dimPair{uint64(nLat), uint64(nLon)}:
-		// Data is [lat, lon] - read directly.
-		flat, err = readSubsetFlat(v, latIdx, lonIdx, 2, 2)
-		needTranspose = false
+		latFirst = true
 	case dimPair{uint64(nLon), uint64(nLat)}:
-		// Data is [lon, lat] - read transposed.
-		flat, err = readSubsetFlat(v, lonIdx, latIdx, 2, 2)
-		needTranspose = true
+		latFirst = false
 	default:
 		return nil, fmt.Errorf("dimension mismatch: data is [%d, %d], expected [%d, %d] or [%d, %d]",
 			dim0Len, dim1Len, nLat, nLon, nLon, nLat)
 	}
 
+	// Read one longitude column (2 latitude values) at a time.
+	readCol := func(lonIdx int) ([]float64, error) {
+		if latFirst {
+			return readSubsetFlat(v, latIdx, lonIdx, 2, 1)
+		}
+		return readSubsetFlat(v, lonIdx, latIdx, 1, 2)
+	}
+
+	colA, err := readCol(lonIdxA)
+	if err != nil {
+		return nil, err
+	}
+	colB, err := readCol(lonIdxB)
 	if err != nil {
 		return nil, err
 	}
 
-	// Convert flat array to 2D.
-	values := make([][]float64, 2)
-	if needTranspose {
-		// flat is [lon, lat], need to transpose to [lat, lon].
-		values[0] = []float64{flat[0], flat[2]}
-		values[1] = []float64{flat[1], flat[3]}
-	} else {
-		// flat is [lat, lon].
-		values[0] = flat[0:2]
-		values[1] = flat[2:4]
-	}
-
-	return values, nil
+	return [][]float64{
+		{colA[0], colB[0]},
+		{colA[1], colB[1]},
+	}, nil
 }
 
 // readSubsetFlat reads a 2D subset from a NetCDF variable as a flat array.
 // It reads data[start0:start0+count0, start1:start1+count1].
+// Fill values (_FillValue/missing_value, including NaN fills) are replaced
+// with NaN, then scale_factor/add_offset unpacking is applied to valid values.
+//
+//nolint:gosec // G115: Safe int to uint64 conversion for NetCDF indices.
 func readSubsetFlat(v netcdf.Var, start0, start1, count0, count1 int) ([]float64, error) {
 	total := count0 * count1
+	start := []uint64{uint64(start0), uint64(start1)}
+	count := []uint64{uint64(count0), uint64(count1)}
 
 	// Get variable type and read subset.
 	t, err := v.Type()
@@ -688,69 +726,120 @@ func readSubsetFlat(v netcdf.Var, start0, start1, count0, count1 int) ([]float64
 		return nil, fmt.Errorf("failed to get var type: %w", err)
 	}
 
+	var flat []float64
 	switch t {
 	case netcdf.DOUBLE:
-		flat := make([]float64, total)
-		if err := v.ReadFloat64Slice(flat, []uint64{uint64(start0), uint64(start1)}, []uint64{uint64(count0), uint64(count1)}); err != nil {
+		flat = make([]float64, total)
+		if err := v.ReadFloat64Slice(flat, start, count); err != nil {
 			return nil, err
 		}
-		return flat, nil
 	case netcdf.FLOAT:
 		tmp := make([]float32, total)
-		if err := v.ReadFloat32Slice(tmp, []uint64{uint64(start0), uint64(start1)}, []uint64{uint64(count0), uint64(count1)}); err != nil {
+		if err := v.ReadFloat32Slice(tmp, start, count); err != nil {
 			return nil, err
 		}
-		flat := make([]float64, total)
+		flat = make([]float64, total)
 		for i, val := range tmp {
 			flat[i] = float64(val)
 		}
-		return flat, nil
 	case netcdf.INT:
 		tmp := make([]int32, total)
-		if err := v.ReadInt32Slice(tmp, []uint64{uint64(start0), uint64(start1)}, []uint64{uint64(count0), uint64(count1)}); err != nil {
+		if err := v.ReadInt32Slice(tmp, start, count); err != nil {
 			return nil, err
 		}
-		flat := make([]float64, total)
+		flat = make([]float64, total)
 		for i, val := range tmp {
 			flat[i] = float64(val)
 		}
-		return flat, nil
 	case netcdf.SHORT:
 		tmp := make([]int16, total)
-		if err := v.ReadInt16Slice(tmp, []uint64{uint64(start0), uint64(start1)}, []uint64{uint64(count0), uint64(count1)}); err != nil {
+		if err := v.ReadInt16Slice(tmp, start, count); err != nil {
 			return nil, err
 		}
-		flat := make([]float64, total)
+		flat = make([]float64, total)
 		for i, val := range tmp {
 			flat[i] = float64(val)
 		}
-		return flat, nil
 	case netcdf.BYTE, netcdf.CHAR, netcdf.UBYTE, netcdf.USHORT, netcdf.UINT, netcdf.INT64, netcdf.UINT64, netcdf.STRING:
 		return nil, fmt.Errorf("unsupported data type: %v", t)
 	default:
 		return nil, fmt.Errorf("unsupported data type: %v", t)
 	}
+
+	applyPacking(v, flat)
+	return flat, nil
 }
 
-// bilinearInterpolate performs bilinear interpolation on a 2x2 grid.
-func bilinearInterpolate(lats, lons []float64, values [][]float64, lat, lon float64) float64 {
+// applyPacking replaces fill values with NaN and applies scale_factor/add_offset
+// unpacking (in that order: fill comparison is done on packed values, per CF
+// conventions). NaN fill values are detected with math.IsNaN since == fails.
+func applyPacking(v netcdf.Var, flat []float64) {
+	fv, hasFill := getFillValue(v)
+	scale, hasScale := getAttrFloat(v, "scale_factor")
+	offset, hasOffset := getAttrFloat(v, "add_offset")
+
+	for i, val := range flat {
+		if math.IsNaN(val) || (hasFill && (val == fv || (math.IsNaN(fv) && math.IsNaN(val)))) {
+			flat[i] = math.NaN()
+			continue
+		}
+		if hasScale && scale != 0 {
+			val *= scale
+		}
+		if hasOffset {
+			val += offset
+		}
+		flat[i] = val
+	}
+}
+
+// bilinearInterpolateValid performs bilinear interpolation on a 2x2 grid,
+// excluding invalid (NaN) points by renormalizing the weights over the valid
+// points. Returns an error if all four points are invalid.
+func bilinearInterpolateValid(lats, lons []float64, values [][]float64, lat, lon float64) (float64, error) {
 	// Normalize coordinates to [0, 1].
 	dx := (lon - lons[0]) / (lons[1] - lons[0])
 	dy := (lat - lats[0]) / (lats[1] - lats[0])
 
-	// Bilinear interpolation formula.
-	v00 := values[0][0]
-	v01 := values[0][1]
-	v10 := values[1][0]
-	v11 := values[1][1]
+	weights := [2][2]float64{
+		{(1 - dy) * (1 - dx), (1 - dy) * dx},
+		{dy * (1 - dx), dy * dx},
+	}
 
-	return (1-dx)*(1-dy)*v00 + dx*(1-dy)*v01 + (1-dx)*dy*v10 + dx*dy*v11
+	var sumW, sumWV, sumValid float64
+	var validCount int
+	for i := 0; i < 2; i++ {
+		for j := 0; j < 2; j++ {
+			val := values[i][j]
+			if math.IsNaN(val) {
+				continue
+			}
+			validCount++
+			sumValid += val
+			sumW += weights[i][j]
+			sumWV += weights[i][j] * val
+		}
+	}
+
+	if validCount == 0 {
+		return 0, fmt.Errorf("all grid points around (%.4f, %.4f) are fill values", lat, lon)
+	}
+	if sumW <= 0 {
+		// Valid points exist but carry zero bilinear weight (the query point
+		// coincides with a fill node): fall back to the mean of valid points.
+		return sumValid / float64(validCount), nil
+	}
+	return sumWV / sumW, nil
 }
 
 // loadNetCDFGrid reads a 2D grid from a NetCDF file.
 //
 //nolint:gocyclo,nestif,gosec // Complex NetCDF loading logic with many variable name patterns.
 func loadNetCDFGrid(filepath, latVarName, lonVarName, dataVarName string) (*interp.Grid2D, error) {
+	// libnetcdf is not thread-safe: serialize the whole open-read-close sequence.
+	ncio.Lock()
+	defer ncio.Unlock()
+
 	// Open NetCDF file.
 	nc, err := netcdf.OpenFile(filepath, netcdf.NOWRITE)
 	if err != nil {
@@ -759,8 +848,8 @@ func loadNetCDFGrid(filepath, latVarName, lonVarName, dataVarName string) (*inte
 	defer func() { _ = nc.Close() }()
 
 	// Try multiple variable name patterns.
-	latNames := []string{latVarName, "latitude", "lat", "y"}
-	lonNames := []string{lonVarName, "longitude", "lon", "x"}
+	latNames := []string{latVarName, "latitude", defaultLatVarName, "y"}
+	lonNames := []string{lonVarName, "longitude", defaultLonVarName, "x"}
 
 	// Build candidate data variable names. Expand to include common FES names.
 	lower := strings.ToLower(dataVarName)
@@ -896,21 +985,18 @@ func loadNetCDFGrid(filepath, latVarName, lonVarName, dataVarName string) (*inte
 		}
 
 		// Handle fill values for complex components (replace with 0).
-		if fv, ok := getFillValue(realVar); ok {
-			for i := range reVals {
-				for j := range reVals[i] {
-					if reVals[i][j] == fv {
-						reVals[i][j] = 0
-					}
+		// read2DFloat64Var returns fill points as NaN.
+		for i := range reVals {
+			for j := range reVals[i] {
+				if math.IsNaN(reVals[i][j]) {
+					reVals[i][j] = 0
 				}
 			}
 		}
-		if fv, ok := getFillValue(imagVar); ok {
-			for i := range imVals {
-				for j := range imVals[i] {
-					if imVals[i][j] == fv {
-						imVals[i][j] = 0
-					}
+		for i := range imVals {
+			for j := range imVals[i] {
+				if math.IsNaN(imVals[i][j]) {
+					imVals[i][j] = 0
 				}
 			}
 		}
@@ -999,13 +1085,12 @@ func loadNetCDFGrid(filepath, latVarName, lonVarName, dataVarName string) (*inte
 		return nil, fmt.Errorf("failed to read data: %w", err)
 	}
 
-	// Replace _FillValue or missing_value with 0 to avoid huge artifacts.
-	if fv, ok := getFillValue(dataVar); ok {
-		for i := range values {
-			for j := range values[i] {
-				if values[i][j] == fv {
-					values[i][j] = 0
-				}
+	// Replace fill values (returned as NaN by read2DFloat64Var) with 0 to
+	// avoid huge artifacts.
+	for i := range values {
+		for j := range values[i] {
+			if math.IsNaN(values[i][j]) {
+				values[i][j] = 0
 			}
 		}
 	}
@@ -1039,27 +1124,42 @@ func loadNetCDFGrid(filepath, latVarName, lonVarName, dataVarName string) (*inte
 // getFillValue returns the _FillValue or missing_value attribute if present as float64.
 func getFillValue(v netcdf.Var) (float64, bool) {
 	for _, name := range []string{"_FillValue", "missing_value"} {
-		a := v.Attr(name)
-		if a == (netcdf.Attr{}) {
-			continue
+		if val, ok := getAttrFloat(v, name); ok {
+			return val, true
 		}
-		if n, err := a.Len(); err == nil && n > 0 {
-			// Try float64
-			buf64 := make([]float64, 1)
-			if err := a.ReadFloat64s(buf64); err == nil {
-				return buf64[0], true
-			}
-			// Try float32
-			buf32 := make([]float32, 1)
-			if err := a.ReadFloat32s(buf32); err == nil {
-				return float64(buf32[0]), true
-			}
-			// Try int32
-			bufi := make([]int32, 1)
-			if err := a.ReadInt32s(bufi); err == nil {
-				return float64(bufi[0]), true
-			}
-		}
+	}
+	return 0, false
+}
+
+// getAttrFloat reads a scalar numeric attribute as float64.
+func getAttrFloat(v netcdf.Var, name string) (float64, bool) {
+	a := v.Attr(name)
+	if a == (netcdf.Attr{}) {
+		return 0, false
+	}
+	n, err := a.Len()
+	if err != nil || n == 0 {
+		return 0, false
+	}
+	// Try float64
+	buf64 := make([]float64, 1)
+	if err := a.ReadFloat64s(buf64); err == nil {
+		return buf64[0], true
+	}
+	// Try float32
+	buf32 := make([]float32, 1)
+	if err := a.ReadFloat32s(buf32); err == nil {
+		return float64(buf32[0]), true
+	}
+	// Try int32
+	bufi := make([]int32, 1)
+	if err := a.ReadInt32s(bufi); err == nil {
+		return float64(bufi[0]), true
+	}
+	// Try int16
+	bufs := make([]int16, 1)
+	if err := a.ReadInt16s(bufs); err == nil {
+		return float64(bufs[0]), true
 	}
 	return 0, false
 }
@@ -1173,6 +1273,9 @@ func read2DFloat64Var(v netcdf.Var, nRows, nCols int) ([][]float64, error) {
 	} else {
 		return nil, fmt.Errorf("failed to get var type: %v", err)
 	}
+
+	// Replace fill values with NaN and unpack scale_factor/add_offset.
+	applyPacking(v, flat)
 
 	values := make([][]float64, nRows)
 	for i := 0; i < nRows; i++ {

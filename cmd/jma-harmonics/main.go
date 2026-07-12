@@ -90,7 +90,7 @@ func main() {
 		os.Exit(1)
 	}
 
-	intercept, overrides, err := fitHarmonics(samples, lon, constituents)
+	intercept, overrides, err := fitHarmonics(samples, constituents)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "fit failed: %v\n", err)
 		os.Exit(1)
@@ -185,7 +185,7 @@ func parseConstituents(csv string) []string {
 	return out
 }
 
-func fitHarmonics(samples []sample, lon float64, names []string) (float64, []overrideConstituent, error) {
+func fitHarmonics(samples []sample, names []string) (float64, []overrideConstituent, error) {
 	speeds := make([]float64, len(names))
 	for i, name := range names {
 		speed, ok := domain.GetConstituentSpeed(name)
@@ -205,14 +205,27 @@ func fitHarmonics(samples []sample, lon float64, names []string) (float64, []ove
 	}
 	rhs := make([]float64, paramCount)
 
+	unixEpoch := time.Unix(0, 0).UTC()
+	// The equilibrium argument V is evaluated once at the reference epoch,
+	// matching domain.CalculateTideHeight (θ = ω·Δt + V(t_ref) + u(t)). The
+	// fitted phase lags are only valid together with the same convention and
+	// the same reference epoch at prediction time.
+	refAbsHours := ref.Sub(unixEpoch).Hours()
+	vRef := make([]float64, len(names))
+	for i, name := range names {
+		vRef[i] = nodal.GetEquilibriumArgument(name, refAbsHours)
+	}
 	for _, s := range samples {
 		deltaHours := s.Time.Sub(ref).Hours()
+		// Nodal corrections (f, u) are evaluated at the absolute observation
+		// time, matching domain.CalculateTideHeight.
+		absHours := s.Time.Sub(unixEpoch).Hours()
 		features := make([]float64, paramCount)
 		features[0] = 1
 		idx := 1
 		for i, name := range names {
-			f, u := nodal.GetFactors(name, deltaHours)
-			thetaDeg := speeds[i]*deltaHours + lon + u
+			f, u := nodal.GetFactors(name, absHours)
+			thetaDeg := speeds[i]*deltaHours + vRef[i] + u
 			thetaRad := domain.Deg2Rad(thetaDeg)
 			cosTerm := f * math.Cos(thetaRad)
 			sinTerm := f * math.Sin(thetaRad)

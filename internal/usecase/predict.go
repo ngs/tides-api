@@ -2,7 +2,11 @@
 package usecase
 
 import (
+	"errors"
 	"fmt"
+	"io/fs"
+	"log"
+	"math"
 	"time"
 
 	"go.ngs.io/tides-api/internal/adapter/store"
@@ -13,6 +17,20 @@ import (
 const (
 	sourceCSV = "csv"
 	sourceFES = "fes"
+)
+
+// Sentinel errors that let transport layers (HTTP handlers) map failures to
+// the right status code via errors.Is without duplicating business rules.
+var (
+	// ErrValidation marks client-caused request errors (HTTP 400). Messages
+	// wrapped with ErrValidation are safe to expose to clients and must never
+	// contain internal details such as file paths.
+	ErrValidation = errors.New("invalid request")
+
+	// ErrNotFound marks requests referencing data that does not exist, such
+	// as an unknown station (HTTP 404). Messages wrapped with ErrNotFound are
+	// safe to expose to clients.
+	ErrNotFound = errors.New("not found")
 )
 
 // PredictionRequest encapsulates a tide prediction request.
@@ -64,7 +82,7 @@ type PredictionResponse struct {
 type PredictionPoint struct {
 	Time    string   `json:"time"`
 	HeightM float64  `json:"height_m"`          // Tide height relative to datum.
-	DepthM  *float64 `json:"depth_m,omitempty"` // Water depth at this time (seabed_depth + msl + height).
+	DepthM  *float64 `json:"depth_m,omitempty"` // Water depth at this time (seabed_depth + height; height already includes MSL).
 }
 
 // ExtremaResponse contains high and low tides.
@@ -147,7 +165,7 @@ func (r *PredictionRequest) Validate() error {
 func (uc *PredictionUseCase) Execute(req PredictionRequest) (*PredictionResponse, error) {
 	// Validate request.
 	if err := req.Validate(); err != nil {
-		return nil, fmt.Errorf("invalid request: %w", err)
+		return nil, fmt.Errorf("%w: %v", ErrValidation, err)
 	}
 
 	// Determine source and load constituents.
@@ -155,20 +173,26 @@ func (uc *PredictionUseCase) Execute(req PredictionRequest) (*PredictionResponse
 	var source string
 	var err error
 
-	if req.StationID != nil {
+	// Match Validate: a pointer to an empty StationID is treated as absent.
+	if req.StationID != nil && *req.StationID != "" {
 		// Use CSV store for station-based queries.
 		source = sourceCSV
 		if req.Source == sourceFES {
-			return nil, fmt.Errorf("FES source does not support station_id - use lat/lon instead")
+			return nil, fmt.Errorf("%w: FES source does not support station_id - use lat/lon instead", ErrValidation)
 		}
 		constituents, err = (*uc.csvStore).LoadForStation(*req.StationID)
 		if err != nil {
+			// A missing data file means the station does not exist. Do not
+			// wrap the underlying store error, which may contain file paths.
+			if errors.Is(err, fs.ErrNotExist) {
+				return nil, fmt.Errorf("%w: no data for station %q", ErrNotFound, *req.StationID)
+			}
 			return nil, fmt.Errorf("failed to load constituents for station %s: %w", *req.StationID, err)
 		}
 	} else {
 		// Use FES store for lat/lon queries (or CSV if explicitly requested).
 		if req.Source == sourceCSV {
-			return nil, fmt.Errorf("CSV source does not support lat/lon - use station_id instead")
+			return nil, fmt.Errorf("%w: CSV source does not support lat/lon - use station_id instead", ErrValidation)
 		}
 		source = sourceFES
 		constituents, err = (*uc.fesStore).LoadForLocation(*req.Lat, *req.Lon)
@@ -184,8 +208,7 @@ func (uc *PredictionUseCase) Execute(req PredictionRequest) (*PredictionResponse
 		metadata, err = uc.bathymetryStore.GetMetadata(*req.Lat, *req.Lon)
 		if err != nil {
 			// Metadata is optional - log warning but continue.
-			// In production, use proper logging.
-			fmt.Printf("Warning: failed to load bathymetry metadata: %v\n", err)
+			log.Printf("Warning: failed to load bathymetry metadata: %v", err)
 		}
 	}
 
@@ -195,11 +218,20 @@ func (uc *PredictionUseCase) Execute(req PredictionRequest) (*PredictionResponse
 		msl = metadata.MSL
 	}
 
+	// Station overrides carry their own fitted datum offset, which
+	// applyStationOverride adds to msl below.
+	var hasOverride bool
+	if req.Lat != nil && req.Lon != nil {
+		_, hasOverride = getStationOverride(*req.Lat, *req.Lon)
+	}
+
 	// Apply optional datum offset (e.g., to align with JMA DL/TP).
 	if req.DatumOffsetM != nil {
 		msl += *req.DatumOffsetM
-	} else if req.Lat != nil && req.Lon != nil {
-		// Auto datum offset: attempt to load nearest known offset (e.g., JMA DL/TP) and apply.
+	} else if req.Lat != nil && req.Lon != nil && !hasOverride {
+		// Auto datum offset: apply the nearest known offset (e.g., JMA DL/TP),
+		// but only when no station override matches - the override's own
+		// datum offset comes from the same JMA fit and must not be added twice.
 		if off, ok := getAutoDatumOffset(*req.Lat, *req.Lon); ok {
 			msl += off
 		}
@@ -240,32 +272,32 @@ func (uc *PredictionUseCase) Execute(req PredictionRequest) (*PredictionResponse
 		PhaseConvention: phaseConv,
 	}
 
+	// Resolve output timezone before heavy computation so invalid values fail fast.
+	loc, tzLabel, err := resolveTimezone(req.Timezone)
+	if err != nil {
+		return nil, err
+	}
+
 	// Generate predictions at requested interval.
 	predictions := domain.GeneratePredictions(req.Start, req.End, req.Interval, params)
 
 	// Compute extrema on high-resolution (1m) grid for accurate times regardless of interval.
+	// Cap the total number of high-resolution points (60 days at 1-minute resolution)
+	// to bound CPU cost for long time ranges; coarsen the grid beyond that.
+	const maxPrecisePoints = 86400
 	preciseInterval := time.Minute
 	if req.Interval < preciseInterval {
 		preciseInterval = req.Interval
 	}
+	if n := req.End.Sub(req.Start) / preciseInterval; n > maxPrecisePoints {
+		preciseInterval = req.End.Sub(req.Start) / maxPrecisePoints
+		// Keep the grid aligned to whole minutes.
+		if rem := preciseInterval % time.Minute; rem != 0 {
+			preciseInterval += time.Minute - rem
+		}
+	}
 	precisePredictions := domain.GeneratePredictions(req.Start, req.End, preciseInterval, params)
 	extrema := domain.RefineExtrema(precisePredictions, domain.FindExtrema(precisePredictions))
-
-	// Choose output timezone.
-	tz := req.Timezone
-	if tz == "" {
-		tz = "utc"
-	}
-	var loc *time.Location
-	var tzLabel string
-	switch tz {
-	case "jst", "JST":
-		loc = time.FixedZone("JST", 9*60*60)
-		tzLabel = "+09:00"
-	default:
-		loc = time.FixedZone("UTC", 0)
-		tzLabel = "+00:00"
-	}
 
 	// Convert to response format.
 	predictionPoints := make([]PredictionPoint, len(predictions))
@@ -276,9 +308,9 @@ func (uc *PredictionUseCase) Execute(req PredictionRequest) (*PredictionResponse
 		}
 
 		// Calculate water depth if seabed depth is available.
-		// Water depth = seabed_depth + msl + tide_height.
+		// Water depth = seabed_depth + tide_height (HeightM already includes MSL).
 		if metadata != nil && metadata.DepthM != nil {
-			waterDepth := *metadata.DepthM + msl + p.HeightM
+			waterDepth := *metadata.DepthM + p.HeightM
 			roundedDepth := roundToDecimal(waterDepth)
 			point.DepthM = &roundedDepth
 		}
@@ -295,7 +327,7 @@ func (uc *PredictionUseCase) Execute(req PredictionRequest) (*PredictionResponse
 
 		// Calculate water depth if seabed depth is available.
 		if metadata != nil && metadata.DepthM != nil {
-			waterDepth := *metadata.DepthM + msl + h.HeightM
+			waterDepth := *metadata.DepthM + h.HeightM
 			roundedDepth := roundToDecimal(waterDepth)
 			point.DepthM = &roundedDepth
 		}
@@ -312,7 +344,7 @@ func (uc *PredictionUseCase) Execute(req PredictionRequest) (*PredictionResponse
 
 		// Calculate water depth if seabed depth is available.
 		if metadata != nil && metadata.DepthM != nil {
-			waterDepth := *metadata.DepthM + msl + l.HeightM
+			waterDepth := *metadata.DepthM + l.HeightM
 			roundedDepth := roundToDecimal(waterDepth)
 			point.DepthM = &roundedDepth
 		}
@@ -402,8 +434,29 @@ func (uc *PredictionUseCase) GetBathymetry(lat, lon float64) (*domain.LocationMe
 	return metadata, nil
 }
 
-// Helper function to round to 3 decimal places.
+// Helper function to round to 3 decimal places (half away from zero).
 func roundToDecimal(val float64) float64 {
-	multiplier := 1000.0
-	return float64(int(val*multiplier+0.5)) / multiplier
+	const multiplier = 1000.0
+	return math.Round(val*multiplier) / multiplier
+}
+
+// resolveTimezone maps a requested timezone string to a *time.Location and a
+// label for the response. An empty string defaults to UTC; unsupported values
+// are an error. Fixed zones are labeled with their offset; IANA zones are
+// labeled with their identifier, because a single offset would be misleading
+// for ranges that cross a DST transition (the per-point RFC3339 timestamps
+// carry the actual offsets).
+func resolveTimezone(tz string) (*time.Location, string, error) {
+	switch tz {
+	case "", "utc", "UTC":
+		return time.UTC, "+00:00", nil
+	case "jst", "JST":
+		return time.FixedZone("JST", 9*60*60), "+09:00", nil
+	default:
+		loc, err := time.LoadLocation(tz)
+		if err != nil {
+			return nil, "", fmt.Errorf("%w: unsupported timezone %q", ErrValidation, tz)
+		}
+		return loc, tz, nil
+	}
 }

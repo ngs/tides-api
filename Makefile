@@ -94,8 +94,8 @@ docker-clean: ## Remove Docker image
 
 # API testing targets
 curl-health: ## Test health endpoint
-	@echo "Testing /healthz endpoint..."
-	curl -s http://localhost:8080/healthz | jq .
+	@echo "Testing /health endpoint..."
+	curl -s http://localhost:8080/health | jq .
 
 curl-constituents: ## Test constituents endpoint
 	@echo "Testing /v1/constituents endpoint..."
@@ -120,7 +120,10 @@ all: clean deps fmt test build ## Run all checks and build
 # FES data management
 FES_DIR := ./data/fes
 FES_USER ?= $(shell cat .fes_credentials 2>/dev/null | head -1)
-FES_PASS ?= $(shell cat .fes_credentials 2>/dev/null | tail -1)
+# The password is never expanded by make: it is resolved inside the recipe
+# shell (from the FES_PASS env var or .fes_credentials) and handed to lftp via
+# the LFTP_PASSWORD env var (--env-password), so it never appears in `ps`.
+FES_PASSWORD_CMD := $${FES_PASS:-$$(sed -n '2p' .fes_credentials 2>/dev/null)}
 FES_HOST := ftp-access.aviso.altimetry.fr
 FES_PORT := 21
 FES_REMOTE_PATH := /auxiliary/tide_model/fes2014_elevations_and_load/fes2014b_elevations
@@ -148,21 +151,21 @@ fes-setup: ## Setup FES credentials (interactive)
 
 fes-list: ## List available FES files on AVISO server
 	@echo "Listing FES2014 files on AVISO server..."
-	@if [ -z "$(FES_USER)" ] || [ -z "$(FES_PASS)" ]; then \
+	@if [ -z "$(FES_USER)" ] || [ -z "$(FES_PASSWORD_CMD)" ]; then \
 		echo "Error: FES credentials not found. Run 'make fes-setup' first."; \
 		exit 1; \
 	fi
-	@lftp -u $(FES_USER),$(FES_PASS) ftp://$(FES_HOST):$(FES_PORT) -e "cd $(FES_REMOTE_PATH); ls; bye"
+	@LFTP_PASSWORD="$(FES_PASSWORD_CMD)" lftp --env-password -u "$(FES_USER)" ftp://$(FES_HOST):$(FES_PORT) -e "cd $(FES_REMOTE_PATH); ls; bye"
 
 fes-download-ocean-tide: ## Download FES2014 ocean tide data archive (~1.9GB)
-	@if [ -z "$(FES_USER)" ] || [ -z "$(FES_PASS)" ]; then \
+	@if [ -z "$(FES_USER)" ] || [ -z "$(FES_PASSWORD_CMD)" ]; then \
 		echo "Error: FES credentials not found. Run 'make fes-setup' first."; \
 		exit 1; \
 	fi
 	@echo "Downloading FES2014 ocean tide data archive..."
 	@echo "This is a 1.9GB file and will take several minutes..."
 	@mkdir -p $(FES_DIR)
-	@lftp -u $(FES_USER),$(FES_PASS) ftp://$(FES_HOST):$(FES_PORT) -e "\
+	@LFTP_PASSWORD="$(FES_PASSWORD_CMD)" lftp --env-password -u "$(FES_USER)" ftp://$(FES_HOST):$(FES_PORT) -e "\
 		cd $(FES_REMOTE_PATH); \
 		lcd $(FES_DIR); \
 		get -c ocean_tide.tar.xz; \
@@ -202,7 +205,7 @@ fes-check: ## Check downloaded FES files
 # Download a single constituent (amplitude + phase files if available)
 # Usage: make fes-download-constituent CONST=m2
 fes-download-constituent: ## Download specific constituent NetCDF (set CONST=m2, s2, m4, ...)
-	@if [ -z "$(FES_USER)" ] || [ -z "$(FES_PASS)" ]; then \
+	@if [ -z "$(FES_USER)" ] || [ -z "$(FES_PASSWORD_CMD)" ]; then \
 		echo "Error: FES credentials not found. Run 'make fes-setup' first."; \
 		exit 1; \
 	fi
@@ -213,7 +216,7 @@ fes-download-constituent: ## Download specific constituent NetCDF (set CONST=m2,
 	@echo "Downloading constituent: $(CONST)"
 	@mkdir -p $(FES_DIR)
 	@const=$$(echo "$(CONST)" | tr '[:upper:]' '[:lower:]'); \
-	lftp -u $(FES_USER),$(FES_PASS) ftp://$(FES_HOST):$(FES_PORT) -e "\
+	LFTP_PASSWORD="$(FES_PASSWORD_CMD)" lftp --env-password -u "$(FES_USER)" ftp://$(FES_HOST):$(FES_PORT) -e "\
 		cd $(FES_REMOTE_PATH); \
 		lcd $(FES_DIR); \
 		get -c $$const\_amplitude.nc || true; \
