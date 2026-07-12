@@ -70,9 +70,13 @@ type ParametersResponse struct {
 //   - ω_k is speed_deg_per_hr,
 //   - Δt is the elapsed time since reference_time in hours,
 //   - V_k is equilibrium_argument_deg: the Greenwich equilibrium argument
-//     evaluated at the absolute reference_time (i.e.
-//     domain.NodalCorrection.GetEquilibriumArgument at hours since the Unix
-//     epoch of reference_time),
+//     evaluated once, server-side, at the absolute instant reference_time.
+//     Concretely it is domain.NodalCorrection.GetEquilibriumArgument(k, T),
+//     where T is the absolute time reference_time expressed as hours since
+//     the Unix epoch (reference_time.Sub(time.Unix(0, 0).UTC()).Hours()),
+//     exactly as domain.CalculateTideHeight evaluates V(t_ref). V_k is
+//     therefore a constant of the response: it does not depend on the
+//     prediction time t, and it is not a relative duration,
 //   - f_k(t) and u_k(t) are the nodal amplitude factor and phase correction,
 //     which the client computes from the astronomical arguments at the
 //     absolute prediction time t (clients that accept small errors over a

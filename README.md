@@ -132,8 +132,11 @@ Errors are returned as `{"error": "<message>"}` with one of the following status
 **Endpoint**: `GET /v1/tides/parameters`
 
 Returns the harmonic constants for a location or station so clients can compute tide heights locally as
-`h(t) = msl_m + Σ f_k(t)·A_k·cos(ω_k·Δt + V_k + u_k(t) − φ_k)`, where `Δt` is hours since `reference_time`,
-`V_k` is `equilibrium_argument_deg`, and `f`/`u` are nodal corrections computed client-side.
+`h(t) = msl_m + Σ f_k(t)·A_k·cos(ω_k·Δt + V_k + u_k(t) − φ_k)`, where `Δt` is hours since `reference_time`.
+`V_k` is `equilibrium_argument_deg`: the Greenwich equilibrium argument the server evaluates once at the
+absolute instant `reference_time` (expressed as hours since the Unix epoch), so it is a constant of the
+response rather than a function of `t`. `f_k(t)`/`u_k(t)` are the nodal corrections, which the client
+computes from the astronomical arguments at the absolute prediction time `t`.
 
 **Query Parameters**: `station_id` OR `lat`+`lon` (mutually exclusive, same validation as predictions), optional `source` (`csv`/`fes`). No time parameters are required.
 
