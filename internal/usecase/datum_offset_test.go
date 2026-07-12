@@ -35,10 +35,10 @@ func resetAdjustmentTables(t *testing.T) {
 
 // Regression test for: when a location matches both a JMA datum offset entry
 // (data/jma_datum_offsets.json, applied via getAutoDatumOffset) and a station
-// override with datum_offset_m (data/jma_station_overrides.json, applied via
-// applyStationOverride), the same fitted offset was added twice. Predictions
-// near every JMA station were biased by a full extra datum offset (~1m scale).
-// The offset must be applied exactly once.
+// override with datum_offset_m (data/jma_station_overrides.json, applied as
+// the base MSL term in Execute), the same fitted offset was added twice.
+// Predictions near every JMA station were biased by a full extra datum offset
+// (~1m scale). The offset must be applied exactly once.
 func TestExecute_DatumOffsetNotDoubleCountedWithStationOverride(t *testing.T) {
 	resetAdjustmentTables(t)
 
