@@ -86,16 +86,130 @@ func (n *AstronomicalNodalCorrection) GetFactors(constituent string, t float64) 
 	return 1.0, 0.0
 }
 
-// GetEquilibriumArgument returns an approximate equilibrium argument V (degrees)
-// for the given constituent at absolute time t (hours since Unix epoch).
-// Placeholder returns 0 until the full astronomical series is integrated.
-func (n *AstronomicalNodalCorrection) GetEquilibriumArgument(constituent string, _ float64) float64 {
+// GetEquilibriumArgument returns the Greenwich equilibrium argument V (degrees,
+// normalized to [0, 360)) for the given constituent at absolute time t (hours
+// since Unix epoch).
+//
+// V is computed analytically from the fundamental astronomical arguments
+// (T, s, h, p) following Schureman (1958) Table 2 (see equilibriumArgumentDeg).
+// The analytic series takes precedence over any V0 constant in an external
+// coefficient file: the shipped data/astro_coeffs.json carries v0=0 for every
+// constituent (it predates this implementation), so honoring those values
+// would silently zero out V. A coefficient-file V0 is used only as a fallback
+// for constituents that have no analytic series here, which lets external
+// files supply V for exotic constituents without code changes.
+func (n *AstronomicalNodalCorrection) GetEquilibriumArgument(constituent string, t float64) float64 {
+	args := n.calculateAstronomicalArguments(t)
+
+	// T: hour angle of the mean sun at Greenwich (degrees). The mean sun
+	// crosses the lower meridian (hour angle 180 deg) at 00:00 UT, so
+	// T = 180 + 15 * (UT hours of day), written here as a continuous
+	// function of days since the Unix epoch (which is at 00:00 UT).
+	days := t / 24.0
+	hourAngleT := 180.0 + 360.0*(days-math.Floor(days))
+
+	if v, ok := equilibriumArgumentDeg(constituent, hourAngleT, args.s, args.h, args.p); ok {
+		return normalizeDeg(v)
+	}
+
+	// Fallback: constant V0 from an external coefficient file, if present.
 	if n.coeffs != nil {
 		if c, ok := n.coeffs.ByName[constituent]; ok {
-			return c.V0
+			return normalizeDeg(c.V0)
 		}
 	}
 	return 0.0
+}
+
+// equilibriumArgumentDeg returns the Greenwich equilibrium argument V (degrees,
+// not normalized) for a constituent given the fundamental arguments:
+//
+//	T: hour angle of the mean sun at Greenwich (180 deg at 00:00 UT)
+//	s: mean longitude of the Moon
+//	h: mean longitude of the Sun
+//	p: mean longitude of the lunar perigee
+//
+// The series follows Schureman (1958) Table 2, which is also the convention
+// used by NOAA, xtide, and pyTMD/arguments.py (Ray 1999 ARGUMENTS.f; pyTMD
+// writes t1 = 15*hour instead of T = 180 + 15*hour, which is identical mod
+// 360 once the explicit +-90/+270 offsets are compared consistently).
+//
+// Sign convention for the +-90 deg terms: literature listings disagree on the
+// signs for the diurnal species, so we follow Schureman Table 2 exactly:
+//
+//	K1: T + h - 90    O1: T - 2s + h + 90    P1: T - h + 90    Q1: T - 3s + h + p + 90
+//
+// This choice is self-consistent with the equilibrium tide physics: the
+// diurnal pairs recombine into the semidiurnal parents with the 90 deg
+// offsets cancelling exactly,
+//
+//	V(K1) + V(O1) = V(M2),  V(K1) + V(P1) = V(S2),  V(K1) + V(Q1) = V(N2),
+//
+// which is required because (K1, O1) both arise from splitting the lunar
+// declinational potential and (K1, P1) from the solar one. It also makes a
+// pure S2 (Greenwich phase lag 0) peak at Greenwich mean noon and midnight,
+// as the equilibrium solar semidiurnal tide must (verified in tests).
+// Shallow-water/compound constituents use sums of their parents' arguments.
+//
+// The second return value is false for constituents without a known series.
+func equilibriumArgumentDeg(constituent string, tHr, s, h, p float64) (float64, bool) {
+	vM2 := 2*tHr - 2*s + 2*h
+	vS2 := 2 * tHr
+	vN2 := 2*tHr - 3*s + 2*h + p
+	vK1 := tHr + h - 90.0
+
+	switch constituent {
+	// Semidiurnal.
+	case "M2":
+		return vM2, true
+	case "S2":
+		return vS2, true
+	case "N2":
+		return vN2, true
+	case "K2":
+		return 2*tHr + 2*h, true
+	// Diurnal.
+	case "K1":
+		return vK1, true
+	case "O1":
+		return tHr - 2*s + h + 90.0, true
+	case "P1":
+		return tHr - h + 90.0, true
+	case "Q1":
+		return tHr - 3*s + h + p + 90.0, true
+	// Shallow water (overtides and compound tides of the parents above).
+	case "M4":
+		return 2 * vM2, true
+	case "M6":
+		return 3 * vM2, true
+	case "S4":
+		return 2 * vS2, true
+	case constMN4:
+		return vM2 + vN2, true
+	case constMS4:
+		return vM2 + vS2, true
+	case constMK3:
+		return vM2 + vK1, true
+	// Long period.
+	case "Mf":
+		return 2 * s, true
+	case "Mm":
+		return s - p, true
+	case constSsa:
+		return 2 * h, true
+	case "Sa":
+		return h, true
+	}
+	return 0, false
+}
+
+// normalizeDeg normalizes an angle in degrees to [0, 360).
+func normalizeDeg(deg float64) float64 {
+	deg = math.Mod(deg, 360.0)
+	if deg < 0 {
+		deg += 360.0
+	}
+	return deg
 }
 
 // Nonlinear nodal coefficients structure: f,u computed via sqrt/atan2 of sin/cos series in N (radians).
@@ -142,6 +256,8 @@ var builtInNonlinearCoeffs = map[string]nonlinearCoeff{
 // AstronomicalArguments holds the fundamental astronomical arguments.
 type AstronomicalArguments struct {
 	N  float64 // Mean longitude of lunar ascending node (degrees).
+	s  float64 // Mean longitude of the Moon (degrees).
+	h  float64 // Mean longitude of the Sun (degrees).
 	p  float64 // Mean longitude of lunar perigee (degrees).
 	ps float64 // Mean longitude of solar perigee (degrees).
 	I  float64 // Inclination of lunar orbit (degrees).
@@ -165,6 +281,13 @@ func (n *AstronomicalNodalCorrection) calculateAstronomicalArguments(t float64) 
 	// N: Mean longitude of lunar ascending node.
 	N := 125.04452 - 1934.136261*T + 0.0020708*T*T + T*T*T/450000.0
 
+	// s: Mean longitude of the Moon (Meeus/IERS; linear rate 0.5490165 deg/hr,
+	// consistent with the tabulated constituent speeds).
+	s := 218.3164477 + 481267.88123421*T - 0.0015786*T*T + T*T*T/538841.0
+
+	// h: Mean longitude of the Sun (linear rate 0.0410686 deg/hr).
+	h := 280.46646 + 36000.76983*T + 0.0003032*T*T
+
 	// p: Mean longitude of lunar perigee.
 	p := 83.35324 + 4069.01363*T - 0.0103238*T*T - T*T*T/80053.0
 
@@ -172,18 +295,11 @@ func (n *AstronomicalNodalCorrection) calculateAstronomicalArguments(t float64) 
 	ps := 282.94 + 1.7192*T
 
 	// Normalize to [0, 360) degrees.
-	N = math.Mod(N, 360.0)
-	if N < 0 {
-		N += 360.0
-	}
-	p = math.Mod(p, 360.0)
-	if p < 0 {
-		p += 360.0
-	}
-	ps = math.Mod(ps, 360.0)
-	if ps < 0 {
-		ps += 360.0
-	}
+	N = normalizeDeg(N)
+	s = normalizeDeg(s)
+	h = normalizeDeg(h)
+	p = normalizeDeg(p)
+	ps = normalizeDeg(ps)
 
 	// Calculate inclination of lunar orbit.
 	I := math.Acos(0.91370 - 0.03569*math.Cos(Deg2Rad(N)))
@@ -197,6 +313,8 @@ func (n *AstronomicalNodalCorrection) calculateAstronomicalArguments(t float64) 
 
 	return AstronomicalArguments{
 		N:  N,
+		s:  s,
+		h:  h,
 		p:  p,
 		ps: ps,
 		I:  IDeg,

@@ -24,10 +24,15 @@ func TestCalculateTideHeight_NodalCorrectionUsesAbsoluteTime(t *testing.T) {
 	refA := time.Unix(0, 0).UTC()                       // Unix epoch
 	refB := time.Date(2012, 1, 1, 0, 0, 0, 0, time.UTC) // FES epoch
 
-	// Adjust phase so that omega*deltaT - phase is identical for both reference times:
-	// phaseB = phaseA + omega * (refA - refB), taken mod 360.
+	// Adjust phase so that omega*deltaT + V(ref) - phase is identical for both
+	// reference times: phaseB = phaseA + omega*(refA - refB) + V(refB) - V(refA),
+	// taken mod 360. The V terms are required because the equilibrium argument
+	// is evaluated at the reference epoch (theta = omega*dt + V(t_ref) + u - phi).
+	nodal := NewAstronomicalNodalCorrection()
+	vA := nodal.GetEquilibriumArgument("M2", refA.Sub(refA).Hours())
+	vB := nodal.GetEquilibriumArgument("M2", refB.Sub(refA).Hours())
 	phaseA := 0.0
-	phaseB := math.Mod(phaseA+speedM2*refA.Sub(refB).Hours(), 360.0)
+	phaseB := math.Mod(phaseA+speedM2*refA.Sub(refB).Hours()+vB-vA, 360.0)
 	if phaseB < 0 {
 		phaseB += 360.0
 	}

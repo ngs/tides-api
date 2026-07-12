@@ -3,6 +3,14 @@ package domain
 
 import "math"
 
+// Named constants for constituents referenced in multiple places.
+const (
+	constMK3 = "MK3"
+	constMN4 = "MN4"
+	constMS4 = "MS4"
+	constSsa = "Ssa"
+)
+
 // Constituent represents a tidal constituent with its angular speed.
 type Constituent struct {
 	Name          string  // E.g., "M2", "S2", "K1", "O1".
@@ -41,18 +49,18 @@ var StandardConstituents = map[string]float64{
 	"Q1": 13.3986609,
 
 	// Shallow water constituents.
-	"M4":  57.9682084,
-	"M6":  86.9523127,
-	"MK3": 44.0251729,
-	"S4":  60.0000000,
-	"MN4": 57.4238337,
-	"MS4": 58.9841042,
+	"M4":     57.9682084,
+	"M6":     86.9523127,
+	constMK3: 44.0251729,
+	"S4":     60.0000000,
+	constMN4: 57.4238337,
+	constMS4: 58.9841042,
 
 	// Long period.
-	"Mf":  1.0980331,
-	"Mm":  0.5443747,
-	"Ssa": 0.0821373,
-	"Sa":  0.0410686,
+	"Mf":     1.0980331,
+	"Mm":     0.5443747,
+	constSsa: 0.0821373,
+	"Sa":     0.0410686,
 }
 
 // NodalCorrection is an interface for applying nodal corrections.

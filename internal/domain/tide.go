@@ -67,7 +67,9 @@ var unixEpoch = time.Unix(0, 0).UTC()
 // where:
 //   - f_k, u_k are nodal corrections (amplitude factor and phase correction),
 //     evaluated at the absolute prediction time (hours since Unix epoch)
-//   - V_k is the Greenwich equilibrium argument
+//   - V_k is the Greenwich equilibrium argument, evaluated once at the
+//     absolute ReferenceTime; the time evolution is carried by ω_k·Δt
+//     (standard harmonic prediction: θ = ωΔt + V(t_ref) + u(t) − φ)
 //   - A_k is amplitude in meters
 //   - ω_k is angular speed in degrees per hour
 //   - φ_k is the Greenwich phase lag in degrees
@@ -81,6 +83,9 @@ func CalculateTideHeight(t time.Time, params PredictionParams) float64 {
 	// Nodal corrections depend on the absolute time being predicted (e.g. the
 	// 18.6-year lunar node cycle), not on the phase reference epoch.
 	absHours := t.Sub(unixEpoch).Hours()
+	// The equilibrium argument V is evaluated at the absolute ReferenceTime
+	// (hours since Unix epoch); ω·Δt then advances the phase from there.
+	refHours := params.ReferenceTime.Sub(unixEpoch).Hours()
 	height := params.MSL
 
 	for _, c := range params.Constituents {
@@ -88,8 +93,8 @@ func CalculateTideHeight(t time.Time, params PredictionParams) float64 {
 		f, u := params.NodalCorrection.GetFactors(c.Name, absHours)
 
 		// Greenwich phase lag convention (no longitude term):
-		// h(t) = f A cos(ωΔt + V + u - φ)
-		v := params.NodalCorrection.GetEquilibriumArgument(c.Name, absHours)
+		// h(t) = f A cos(ωΔt + V(t_ref) + u - φ)
+		v := params.NodalCorrection.GetEquilibriumArgument(c.Name, refHours)
 		phaseAngleDeg := c.SpeedDegPerHr*deltaHours + v + u - c.PhaseDeg
 
 		// Convert to radians and calculate contribution.
