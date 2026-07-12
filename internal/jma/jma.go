@@ -130,11 +130,21 @@ func loadBytes(path string) ([]byte, error) {
 			return nil, err
 		}
 		defer func() { _ = resp.Body.Close() }()
+		// Annual hourly TXT files are ~50 KB; cap reads so a misbehaving
+		// server cannot exhaust memory.
+		const maxResponseBytes = 16 << 20 // 16 MiB
 		if resp.StatusCode != http.StatusOK {
-			body, _ := io.ReadAll(resp.Body)
+			body, _ := io.ReadAll(io.LimitReader(resp.Body, 4<<10))
 			return nil, fmt.Errorf("HTTP %d: %s", resp.StatusCode, string(body))
 		}
-		return io.ReadAll(resp.Body)
+		body, err := io.ReadAll(io.LimitReader(resp.Body, maxResponseBytes+1))
+		if err != nil {
+			return nil, err
+		}
+		if len(body) > maxResponseBytes {
+			return nil, fmt.Errorf("response exceeds %d bytes", maxResponseBytes)
+		}
+		return body, nil
 	}
 	//nolint:gosec // G304: File path from caller for JMA data files.
 	return os.ReadFile(path)
