@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"regexp"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -32,6 +33,13 @@ const (
 // errorJSON builds the standard error response body.
 func errorJSON(msg string) gin.H {
 	return gin.H{"error": msg}
+}
+
+// clientMessage strips the sentinel prefix (e.g. "invalid request: ") from a
+// typed use-case error so client-facing messages stay consistent with
+// handler-level validation errors, which carry no such prefix.
+func clientMessage(err, sentinel error) string {
+	return strings.TrimPrefix(err.Error(), sentinel.Error()+": ")
 }
 
 // Handler handles HTTP requests for tide predictions.
@@ -68,9 +76,9 @@ func (h *Handler) GetPredictions(c *gin.Context) {
 	if err != nil {
 		switch {
 		case errors.Is(err, usecase.ErrValidation):
-			c.JSON(http.StatusBadRequest, errorJSON(err.Error()))
+			c.JSON(http.StatusBadRequest, errorJSON(clientMessage(err, usecase.ErrValidation)))
 		case errors.Is(err, usecase.ErrNotFound):
-			c.JSON(http.StatusNotFound, errorJSON(err.Error()))
+			c.JSON(http.StatusNotFound, errorJSON(clientMessage(err, usecase.ErrNotFound)))
 		default:
 			log.Printf("prediction execute failed: %v", err)
 			c.JSON(http.StatusInternalServerError, errorJSON("internal server error"))
