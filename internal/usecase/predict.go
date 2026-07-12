@@ -2,7 +2,9 @@
 package usecase
 
 import (
+	"errors"
 	"fmt"
+	"io/fs"
 	"log"
 	"math"
 	"time"
@@ -15,6 +17,20 @@ import (
 const (
 	sourceCSV = "csv"
 	sourceFES = "fes"
+)
+
+// Sentinel errors that let transport layers (HTTP handlers) map failures to
+// the right status code via errors.Is without duplicating business rules.
+var (
+	// ErrValidation marks client-caused request errors (HTTP 400). Messages
+	// wrapped with ErrValidation are safe to expose to clients and must never
+	// contain internal details such as file paths.
+	ErrValidation = errors.New("invalid request")
+
+	// ErrNotFound marks requests referencing data that does not exist, such
+	// as an unknown station (HTTP 404). Messages wrapped with ErrNotFound are
+	// safe to expose to clients.
+	ErrNotFound = errors.New("not found")
 )
 
 // PredictionRequest encapsulates a tide prediction request.
@@ -149,7 +165,7 @@ func (r *PredictionRequest) Validate() error {
 func (uc *PredictionUseCase) Execute(req PredictionRequest) (*PredictionResponse, error) {
 	// Validate request.
 	if err := req.Validate(); err != nil {
-		return nil, fmt.Errorf("invalid request: %w", err)
+		return nil, fmt.Errorf("%w: %v", ErrValidation, err)
 	}
 
 	// Determine source and load constituents.
@@ -162,16 +178,21 @@ func (uc *PredictionUseCase) Execute(req PredictionRequest) (*PredictionResponse
 		// Use CSV store for station-based queries.
 		source = sourceCSV
 		if req.Source == sourceFES {
-			return nil, fmt.Errorf("FES source does not support station_id - use lat/lon instead")
+			return nil, fmt.Errorf("%w: FES source does not support station_id - use lat/lon instead", ErrValidation)
 		}
 		constituents, err = (*uc.csvStore).LoadForStation(*req.StationID)
 		if err != nil {
+			// A missing data file means the station does not exist. Do not
+			// wrap the underlying store error, which may contain file paths.
+			if errors.Is(err, fs.ErrNotExist) {
+				return nil, fmt.Errorf("%w: no data for station %q", ErrNotFound, *req.StationID)
+			}
 			return nil, fmt.Errorf("failed to load constituents for station %s: %w", *req.StationID, err)
 		}
 	} else {
 		// Use FES store for lat/lon queries (or CSV if explicitly requested).
 		if req.Source == sourceCSV {
-			return nil, fmt.Errorf("CSV source does not support lat/lon - use station_id instead")
+			return nil, fmt.Errorf("%w: CSV source does not support lat/lon - use station_id instead", ErrValidation)
 		}
 		source = sourceFES
 		constituents, err = (*uc.fesStore).LoadForLocation(*req.Lat, *req.Lon)
@@ -421,7 +442,7 @@ func resolveTimezone(tz string, at time.Time) (*time.Location, string, error) {
 	default:
 		loc, err := time.LoadLocation(tz)
 		if err != nil {
-			return nil, "", fmt.Errorf("unsupported timezone %q: %w", tz, err)
+			return nil, "", fmt.Errorf("%w: unsupported timezone %q", ErrValidation, tz)
 		}
 		return loc, at.In(loc).Format("-07:00"), nil
 	}

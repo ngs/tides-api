@@ -2,6 +2,7 @@
 package http
 
 import (
+	"errors"
 	"fmt"
 	"log"
 	"net/http"
@@ -58,32 +59,22 @@ func (h *Handler) GetPredictions(c *gin.Context) {
 		return
 	}
 
-	// Validate the request up front so client errors are reported as 400
-	// with a meaningful message. Execute also validates internally, but by
-	// validating here we can treat any later Execute failure as internal.
-	if err := req.Validate(); err != nil {
-		c.JSON(http.StatusBadRequest, errorJSON(err.Error()))
-		return
-	}
-
-	// Source/identifier combination checks mirrored from the use case so
-	// they surface as 400 instead of opaque internal errors.
-	if req.StationID != nil && req.Source == "fes" {
-		c.JSON(http.StatusBadRequest, errorJSON("FES source does not support station_id - use lat/lon instead"))
-		return
-	}
-	if req.Lat != nil && req.Lon != nil && req.Source == "csv" {
-		c.JSON(http.StatusBadRequest, errorJSON("CSV source does not support lat/lon - use station_id instead"))
-		return
-	}
-
-	// Execute use case. The request has already been validated, so any
-	// failure here is an internal error (e.g. data store failure). Do not
-	// leak internal details such as file paths to the client.
+	// Execute the use case and map typed errors to status codes. Validation
+	// (including source/identifier combination checks) happens inside
+	// Execute; ErrValidation / ErrNotFound messages are guaranteed by the
+	// use case to be safe to expose. Anything else is an internal error and
+	// must not leak details such as file paths to the client.
 	response, err := h.predictionUC.Execute(req)
 	if err != nil {
-		log.Printf("prediction execute failed: %v", err)
-		c.JSON(http.StatusInternalServerError, errorJSON("internal server error"))
+		switch {
+		case errors.Is(err, usecase.ErrValidation):
+			c.JSON(http.StatusBadRequest, errorJSON(err.Error()))
+		case errors.Is(err, usecase.ErrNotFound):
+			c.JSON(http.StatusNotFound, errorJSON(err.Error()))
+		default:
+			log.Printf("prediction execute failed: %v", err)
+			c.JSON(http.StatusInternalServerError, errorJSON("internal server error"))
+		}
 		return
 	}
 
