@@ -153,7 +153,7 @@ func TestExecute_EmptyStationIDPointerUsesLatLonPath(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Execute failed for empty station_id with valid lat/lon: %v", err)
 	}
-	if resp.Source != "fes" {
+	if resp.Source != sourceFES {
 		t.Errorf("expected lat/lon (fes) path, got source %q", resp.Source)
 	}
 }

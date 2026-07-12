@@ -24,10 +24,11 @@ var stationIDPattern = regexp.MustCompile(`^[A-Za-z0-9_-]+$`)
 
 // Query parameter / response field names shared across handlers.
 const (
-	paramLat   = "lat"
-	paramLon   = "lon"
-	paramStart = "start"
-	paramEnd   = "end"
+	paramLat       = "lat"
+	paramLon       = "lon"
+	paramStart     = "start"
+	paramEnd       = "end"
+	paramStationID = "station_id"
 )
 
 // errorJSON builds the standard error response body.
@@ -89,12 +90,49 @@ func (h *Handler) GetPredictions(c *gin.Context) {
 	c.JSON(http.StatusOK, response)
 }
 
+// GetTideParameters handles GET /v1/tides/parameters. It returns the harmonic
+// constants (amplitudes, phases, speeds and equilibrium arguments) for a
+// location or station so that clients can compute tide heights locally; see
+// usecase.PredictionUseCase.GetParameters for the computation contract.
+func (h *Handler) GetTideParameters(c *gin.Context) {
+	// Reuse the predictions location parsing (lat/lon pairing, station_id
+	// pattern validation) so both endpoints share the same rules.
+	var locReq usecase.PredictionRequest
+	if !parseLocation(c, &locReq) {
+		return
+	}
+
+	req := usecase.ParametersRequest{
+		Lat:       locReq.Lat,
+		Lon:       locReq.Lon,
+		StationID: locReq.StationID,
+		Source:    c.Query("source"),
+	}
+
+	// Map typed use-case errors to status codes, mirroring GetPredictions.
+	response, err := h.predictionUC.GetParameters(req)
+	if err != nil {
+		switch {
+		case errors.Is(err, usecase.ErrValidation):
+			c.JSON(http.StatusBadRequest, errorJSON(clientMessage(err, usecase.ErrValidation)))
+		case errors.Is(err, usecase.ErrNotFound):
+			c.JSON(http.StatusNotFound, errorJSON(clientMessage(err, usecase.ErrNotFound)))
+		default:
+			log.Printf("parameters lookup failed: %v", err)
+			c.JSON(http.StatusInternalServerError, errorJSON("internal server error"))
+		}
+		return
+	}
+
+	c.JSON(http.StatusOK, response)
+}
+
 // parseLocation fills lat/lon and station_id on req. It writes a 400 response
 // and returns false on invalid input.
 func parseLocation(c *gin.Context, req *usecase.PredictionRequest) bool {
 	latStr := c.Query(paramLat)
 	lonStr := c.Query(paramLon)
-	stationID := c.Query("station_id")
+	stationID := c.Query(paramStationID)
 
 	// Reject partial lat/lon pairs explicitly instead of silently ignoring them.
 	if latStr != "" && lonStr == "" {

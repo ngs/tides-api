@@ -14,8 +14,15 @@ import (
 
 // JSON fixture key names shared across tests.
 const (
-	fieldLat = "lat"
-	fieldLon = "lon"
+	fieldLat          = "lat"
+	fieldLon          = "lon"
+	fieldName         = "name"
+	fieldStation      = "station"
+	fieldDatumOffset  = "datum_offset_m"
+	fieldRadius       = "radius_km"
+	fieldConstituents = "constituents"
+	fieldAmplitude    = "amplitude_m"
+	fieldPhase        = "phase_deg"
 )
 
 // resetAdjustmentTables clears the lazily-loaded datum offset and station
@@ -43,10 +50,9 @@ func TestExecute_DatumOffsetNotDoubleCountedWithStationOverride(t *testing.T) {
 	resetAdjustmentTables(t)
 
 	const (
-		lat       = 35.38153
-		lon       = 139.867951
-		offset    = 1.0
-		fieldName = "name"
+		lat    = 35.38153
+		lon    = 139.867951
+		offset = 1.0
 	)
 
 	dir := t.TempDir()
@@ -57,10 +63,10 @@ func TestExecute_DatumOffsetNotDoubleCountedWithStationOverride(t *testing.T) {
 	overridesPath := filepath.Join(dir, "overrides.json")
 	writeJSON(t, overridesPath, []map[string]any{
 		{
-			fieldName: "KZ", "station": "KZ", fieldLat: lat, fieldLon: lon,
-			"radius_km": 40, "datum_offset_m": offset,
-			"constituents": []map[string]any{
-				{fieldName: "M2", "amplitude_m": 0.0, "phase_deg": 0.0},
+			fieldName: "KZ", fieldStation: "KZ", fieldLat: lat, fieldLon: lon,
+			fieldRadius: 40, fieldDatumOffset: offset,
+			fieldConstituents: []map[string]any{
+				{fieldName: "M2", fieldAmplitude: 0.0, fieldPhase: 0.0},
 			},
 		},
 	})
@@ -116,10 +122,10 @@ func TestExecute_OverrideDatumReplacesModelMSL(t *testing.T) {
 	overridesPath := filepath.Join(dir, "overrides.json")
 	writeJSON(t, overridesPath, []map[string]any{
 		{
-			"name": "KZ", "station": "KZ", fieldLat: lat, fieldLon: lon,
-			"radius_km": 40, "datum_offset_m": intercept,
-			"constituents": []map[string]any{
-				{"name": "M2", "amplitude_m": 0.0, "phase_deg": 0.0},
+			fieldName: "KZ", fieldStation: "KZ", fieldLat: lat, fieldLon: lon,
+			fieldRadius: 40, fieldDatumOffset: intercept,
+			fieldConstituents: []map[string]any{
+				{fieldName: "M2", fieldAmplitude: 0.0, fieldPhase: 0.0},
 			},
 		},
 	})

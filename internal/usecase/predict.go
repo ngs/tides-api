@@ -17,6 +17,9 @@ import (
 const (
 	sourceCSV = "csv"
 	sourceFES = "fes"
+
+	// datumMSL is the default vertical datum label in responses.
+	datumMSL = "MSL"
 )
 
 // Sentinel errors that let transport layers (HTTP handlers) map failures to
@@ -107,11 +110,13 @@ func NewPredictionUseCase(csvStore, fesStore store.ConstituentLoader, bathyStore
 	}
 }
 
-// Validate checks if the request is valid.
-func (r *PredictionRequest) Validate() error {
+// validateLocation checks the lat/lon vs station_id parameter combination
+// shared by predictions and parameters requests. A pointer to an empty
+// StationID is treated as absent.
+func validateLocation(lat, lon *float64, stationID *string) error {
 	// Check mutually exclusive parameters.
-	hasLatLon := r.Lat != nil && r.Lon != nil
-	hasStationID := r.StationID != nil && *r.StationID != ""
+	hasLatLon := lat != nil && lon != nil
+	hasStationID := stationID != nil && *stationID != ""
 
 	if !hasLatLon && !hasStationID {
 		return fmt.Errorf("either lat/lon or station_id must be provided")
@@ -121,14 +126,31 @@ func (r *PredictionRequest) Validate() error {
 		return fmt.Errorf("lat/lon and station_id are mutually exclusive")
 	}
 
-	// Validate lat/lon ranges.
+	// Validate lat/lon ranges. Non-finite values must be rejected explicitly:
+	// strconv.ParseFloat accepts "NaN"/"Inf", and every comparison against NaN
+	// is false, so a bare range check would let them through to compute paths.
 	if hasLatLon {
-		if *r.Lat < -90 || *r.Lat > 90 {
+		if math.IsNaN(*lat) || math.IsInf(*lat, 0) {
+			return fmt.Errorf("latitude must be a finite number")
+		}
+		if math.IsNaN(*lon) || math.IsInf(*lon, 0) {
+			return fmt.Errorf("longitude must be a finite number")
+		}
+		if *lat < -90 || *lat > 90 {
 			return fmt.Errorf("latitude must be between -90 and 90")
 		}
-		if *r.Lon < -180 || *r.Lon > 180 {
+		if *lon < -180 || *lon > 180 {
 			return fmt.Errorf("longitude must be between -180 and 180")
 		}
+	}
+
+	return nil
+}
+
+// Validate checks if the request is valid.
+func (r *PredictionRequest) Validate() error {
+	if err := validateLocation(r.Lat, r.Lon, r.StationID); err != nil {
+		return err
 	}
 
 	// Validate time range.
@@ -159,15 +181,27 @@ func (r *PredictionRequest) Validate() error {
 	return nil
 }
 
-// Execute performs the tide prediction.
-//
-//nolint:gocyclo,nestif // Complex prediction logic with multiple conditional paths.
-func (uc *PredictionUseCase) Execute(req PredictionRequest) (*PredictionResponse, error) {
-	// Validate request.
-	if err := req.Validate(); err != nil {
-		return nil, fmt.Errorf("%w: %v", ErrValidation, err)
-	}
+// resolvedParams bundles the location-resolved prediction inputs shared by
+// Execute and GetParameters: the constituent set (with station overrides
+// applied), the effective MSL term (including override intercepts and datum
+// offsets), optional bathymetry metadata, and the phase reference epoch.
+type resolvedParams struct {
+	source       string
+	constituents []domain.ConstituentParam
+	metadata     *domain.LocationMetadata
+	msl          float64
+	refTime      time.Time
+}
 
+// resolvePredictionParams performs the location-dependent part of a
+// prediction: it loads constituents from the appropriate store, fetches
+// bathymetry metadata, applies station overrides and datum offsets to the MSL
+// term, and determines the phase reference epoch. Only the Lat/Lon/StationID,
+// Source and DatumOffsetM fields of req are consulted; location validation is
+// the caller's responsibility.
+//
+//nolint:gocyclo,nestif // Multiple conditional data-source and override paths.
+func (uc *PredictionUseCase) resolvePredictionParams(req PredictionRequest) (*resolvedParams, error) {
 	// Determine source and load constituents.
 	var constituents []domain.ConstituentParam
 	var source string
@@ -244,6 +278,39 @@ func (uc *PredictionUseCase) Execute(req PredictionRequest) (*PredictionResponse
 
 	constituents = applyOverrideConstituents(override, constituents)
 
+	// Reference time: use FES epoch for FES source to align phases, else Unix epoch.
+	refTime := time.Unix(0, 0).UTC()
+	if source == sourceFES {
+		// FES2014 phases are commonly referenced to 2012-01-01 00:00:00 UTC.
+		refTime = time.Date(2012, 1, 1, 0, 0, 0, 0, time.UTC)
+	}
+
+	return &resolvedParams{
+		source:       source,
+		constituents: constituents,
+		metadata:     metadata,
+		msl:          msl,
+		refTime:      refTime,
+	}, nil
+}
+
+// Execute performs the tide prediction.
+//
+//nolint:gocyclo // Complex prediction logic with multiple conditional paths.
+func (uc *PredictionUseCase) Execute(req PredictionRequest) (*PredictionResponse, error) {
+	// Validate request.
+	if err := req.Validate(); err != nil {
+		return nil, fmt.Errorf("%w: %v", ErrValidation, err)
+	}
+
+	resolved, err := uc.resolvePredictionParams(req)
+	if err != nil {
+		return nil, err
+	}
+	source := resolved.source
+	constituents := resolved.constituents
+	metadata := resolved.metadata
+
 	// Set longitude for Greenwich phase correction (only for lat/lon queries).
 	lon := 0.0
 	if req.Lon != nil {
@@ -259,19 +326,12 @@ func (uc *PredictionUseCase) Execute(req PredictionRequest) (*PredictionResponse
 		phaseConv = domain.PhaseConvFESGreenwich
 	}
 
-	// Reference time: use FES epoch for FES source to align phases, else Unix epoch.
-	refTime := time.Unix(0, 0).UTC()
-	if source == sourceFES {
-		// FES2014 phases are commonly referenced to 2012-01-01 00:00:00 UTC.
-		refTime = time.Date(2012, 1, 1, 0, 0, 0, 0, time.UTC)
-	}
-
 	params := domain.PredictionParams{
 		Constituents:    constituents,
-		MSL:             msl,
+		MSL:             resolved.msl,
 		Longitude:       lon,
 		NodalCorrection: domain.NewAstronomicalNodalCorrection(),
-		ReferenceTime:   refTime,
+		ReferenceTime:   resolved.refTime,
 		PhaseConvention: phaseConv,
 	}
 
@@ -364,7 +424,7 @@ func (uc *PredictionUseCase) Execute(req PredictionRequest) (*PredictionResponse
 	// Determine datum.
 	datum := req.Datum
 	if datum == "" {
-		datum = "MSL"
+		datum = datumMSL
 	}
 
 	// Build response.

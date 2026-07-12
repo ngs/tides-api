@@ -19,6 +19,8 @@ const (
 	testCSVContent = "constituent,amplitude_m,phase_deg\nM2,0.5,30.0\n"
 	testStart      = "2025-10-27T00:00:00Z"
 	testEnd        = "2025-10-28T00:00:00Z"
+	testLatStr     = "35.6"
+	testLonStr     = "139.7"
 )
 
 // newTestEnv builds a prediction use case backed by a real CSV store rooted
@@ -107,7 +109,7 @@ func TestGetPredictions_StationIDPathTraversalRejected(t *testing.T) {
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			q := url.Values{"station_id": {tc.stationID}}
+			q := url.Values{paramStationID: {tc.stationID}}
 			for k, v := range timeParams {
 				q[k] = v
 			}
@@ -142,9 +144,9 @@ func TestGetPredictions_InternalErrorNotExposedAsBadRequest(t *testing.T) {
 	r.GET("/v1/tides/predictions", h.GetPredictions)
 
 	q := url.Values{
-		"station_id": {"nosuchstation"},
-		paramStart:   {testStart},
-		paramEnd:     {testEnd},
+		paramStationID: {"nosuchstation"},
+		paramStart:     {testStart},
+		paramEnd:       {testEnd},
 	}
 	w := doGet(t, r, q.Encode())
 
@@ -178,7 +180,7 @@ func TestGetPredictions_LatWithoutLonRejectedExplicitly(t *testing.T) {
 
 	t.Run("lat only with start/end", func(t *testing.T) {
 		q := url.Values{
-			paramLat:   {"35.6"},
+			paramLat:   {testLatStr},
 			paramStart: {testStart},
 			paramEnd:   {testEnd},
 		}
@@ -199,7 +201,7 @@ func TestGetPredictions_LatWithoutLonRejectedExplicitly(t *testing.T) {
 	})
 
 	t.Run("lat only without start/end", func(t *testing.T) {
-		q := url.Values{paramLat: {"35.6"}}
+		q := url.Values{paramLat: {testLatStr}}
 		w := doGet(t, r, q.Encode())
 		body := w.Body.String()
 
