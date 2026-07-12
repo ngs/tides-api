@@ -43,6 +43,7 @@ func SetupRouter(predictionUC *usecase.PredictionUseCase) *gin.Engine {
 	// Tide predictions.
 	tides := v1.Group("/tides")
 	tides.GET("/predictions", handler.GetPredictions)
+	tides.GET("/parameters", handler.GetTideParameters)
 
 	// Constituents.
 	v1.GET("/constituents", handler.GetConstituentsList)

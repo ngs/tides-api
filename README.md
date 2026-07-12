@@ -127,7 +127,43 @@ Errors are returned as `{"error": "<message>"}` with one of the following status
 | `404` | Unknown station | `no data for station "xxx"` |
 | `500` | Internal error (details are logged server-side, never returned to clients) | `internal server error` |
 
-### 2. Get Constituents
+### 2. Get Harmonic Parameters
+
+**Endpoint**: `GET /v1/tides/parameters`
+
+Returns the harmonic constants for a location or station so clients can compute tide heights locally as
+`h(t) = msl_m + Σ f_k(t)·A_k·cos(ω_k·Δt + V_k + u_k(t) − φ_k)`, where `Δt` is hours since `reference_time`,
+`V_k` is `equilibrium_argument_deg`, and `f`/`u` are nodal corrections computed client-side.
+
+**Query Parameters**: `station_id` OR `lat`+`lon` (mutually exclusive, same validation as predictions), optional `source` (`csv`/`fes`). No time parameters are required.
+
+**Example Request**:
+
+```bash
+curl 'http://localhost:8080/v1/tides/parameters?lat=35.38&lon=139.87'
+```
+
+**Example Response**:
+
+```json
+{
+  "location": {"lat": 35.38, "lon": 139.87},
+  "source": "fes",
+  "datum": "MSL",
+  "msl_m": 1.15,
+  "seabed_depth_m": 2.64,
+  "reference_time": "2012-01-01T00:00:00Z",
+  "constituents": [
+    {"name": "M2", "speed_deg_per_hr": 28.9841042, "amplitude_m": 0.51,
+     "phase_deg": 133.1, "equilibrium_argument_deg": 288.4}
+  ],
+  "meta": {"model": "harmonic_v0", "attribution": "FES2014/2022 tidal model"}
+}
+```
+
+Station queries (`station_id=tokyo`) return `"station_id"` instead of `"location"` and use the Unix epoch as `reference_time`. Errors follow the same `400`/`404`/`500` scheme as predictions.
+
+### 3. Get Constituents
 
 **Endpoint**: `GET /v1/constituents`
 
@@ -155,7 +191,7 @@ curl http://localhost:8080/v1/constituents
 }
 ```
 
-### 3. Health Check
+### 4. Health Check
 
 **Endpoint**: `GET /health`
 
