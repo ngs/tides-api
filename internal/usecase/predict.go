@@ -126,8 +126,16 @@ func validateLocation(lat, lon *float64, stationID *string) error {
 		return fmt.Errorf("lat/lon and station_id are mutually exclusive")
 	}
 
-	// Validate lat/lon ranges.
+	// Validate lat/lon ranges. Non-finite values must be rejected explicitly:
+	// strconv.ParseFloat accepts "NaN"/"Inf", and every comparison against NaN
+	// is false, so a bare range check would let them through to compute paths.
 	if hasLatLon {
+		if math.IsNaN(*lat) || math.IsInf(*lat, 0) {
+			return fmt.Errorf("latitude must be a finite number")
+		}
+		if math.IsNaN(*lon) || math.IsInf(*lon, 0) {
+			return fmt.Errorf("longitude must be a finite number")
+		}
 		if *lat < -90 || *lat > 90 {
 			return fmt.Errorf("latitude must be between -90 and 90")
 		}

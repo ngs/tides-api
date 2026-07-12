@@ -213,6 +213,12 @@ func TestGetParameters_Validation(t *testing.T) {
 		}},
 		{"latitude out of range", ParametersRequest{Lat: ptrFloat(91.0), Lon: ptrFloat(0.0)}},
 		{"longitude out of range", ParametersRequest{Lat: ptrFloat(0.0), Lon: ptrFloat(181.0)}},
+		// Non-finite coordinates must be rejected: every comparison against
+		// NaN is false, so a bare range check would let them through.
+		{"NaN latitude", ParametersRequest{Lat: ptrFloat(math.NaN()), Lon: ptrFloat(0.0)}},
+		{"NaN longitude", ParametersRequest{Lat: ptrFloat(0.0), Lon: ptrFloat(math.NaN())}},
+		{"Inf latitude", ParametersRequest{Lat: ptrFloat(math.Inf(1)), Lon: ptrFloat(0.0)}},
+		{"negative Inf longitude", ParametersRequest{Lat: ptrFloat(0.0), Lon: ptrFloat(math.Inf(-1))}},
 		{"station_id with fes source", ParametersRequest{
 			StationID: ptrString("tokyo"), Source: "fes",
 		}},

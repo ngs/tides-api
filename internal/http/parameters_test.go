@@ -103,6 +103,10 @@ func TestGetTideParameters_BadRequest(t *testing.T) {
 		{"lat without lon", url.Values{paramLat: {testLatStr}}.Encode(), "lon"},
 		{"lon without lat", url.Values{paramLon: {testLonStr}}.Encode(), "lat"},
 		{"invalid latitude", url.Values{paramLat: {"abc"}, paramLon: {testLonStr}}.Encode(), "latitude"},
+		// strconv.ParseFloat accepts "NaN"/"Inf", so these reach validation as
+		// non-finite floats and must be rejected rather than silently used.
+		{"NaN latitude", url.Values{paramLat: {"NaN"}, paramLon: {testLonStr}}.Encode(), "latitude"},
+		{"Inf longitude", url.Values{paramLat: {testLatStr}, paramLon: {"Inf"}}.Encode(), "longitude"},
 		{"path traversal station_id", url.Values{paramStationID: {"x/../../outside/secret"}}.Encode(), "station_id"},
 		{"lat/lon and station_id", url.Values{
 			paramLat: {testLatStr}, paramLon: {testLonStr}, paramStationID: {testStation},
