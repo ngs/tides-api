@@ -127,12 +127,16 @@ func (s *Store) LoadForLocation(lat, lon float64) ([]domain.ConstituentParam, er
 		// Each request reads only the 4 grid points needed for bilinear interpolation.
 		amplitude, phase, err := s.interpolateConstituentAtPoint(constName, lat, lon)
 		if err != nil {
-			// Skip constituents that fail to load, but log so failures are visible.
-			log.Printf("warning: skipping FES constituent %s at (%.4f, %.4f): %v", constName, lat, lon, err)
 			loadErrCount++
 			if errors.Is(err, store.ErrNoData) {
+				// An expected coverage miss (land cell): every constituent hits it
+				// at the same location, so logging per constituent would flood the
+				// log for a routine 404. It is summarized once below instead.
 				noDataErrCount++
+				continue
 			}
+			// Skip constituents that fail to load, but log so failures are visible.
+			log.Printf("warning: skipping FES constituent %s at (%.4f, %.4f): %v", constName, lat, lon, err)
 			continue
 		}
 
@@ -149,6 +153,12 @@ func (s *Store) LoadForLocation(lat, lon float64) ([]domain.ConstituentParam, er
 			PhaseDeg:      phase,
 			SpeedDegPerHr: speed,
 		})
+	}
+
+	// Summarize coverage misses in a single line instead of one per constituent.
+	if noDataErrCount > 0 {
+		log.Printf("info: %d/%d FES constituents have no data coverage at (%.4f, %.4f)",
+			noDataErrCount, len(constituents), lat, lon)
 	}
 
 	if len(params) == 0 {
