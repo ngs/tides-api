@@ -2,6 +2,7 @@ package http
 
 import (
 	"encoding/json"
+	"fmt"
 	nethttp "net/http"
 	"net/http/httptest"
 	"net/url"
@@ -9,6 +10,10 @@ import (
 	"testing"
 
 	"github.com/gin-gonic/gin"
+
+	"go.ngs.io/tides-api/internal/adapter/store"
+	"go.ngs.io/tides-api/internal/domain"
+	"go.ngs.io/tides-api/internal/usecase"
 )
 
 const testStation = "tokyo"
@@ -86,6 +91,45 @@ func TestGetTideParameters_Station(t *testing.T) {
 	// A station response must not include a lat/lon location object.
 	if strings.Contains(w.Body.String(), `"location"`) {
 		t.Errorf("station response must not include location: %s", w.Body.String())
+	}
+}
+
+// landConstituentLoader mimics the FES store at an inland coordinate: every
+// grid neighbour is a fill value, so no constituent can be interpolated.
+type landConstituentLoader struct{}
+
+func (landConstituentLoader) LoadForStation(_ string) ([]domain.ConstituentParam, error) {
+	return nil, fmt.Errorf("%w: no data", store.ErrNoData)
+}
+
+func (landConstituentLoader) LoadForLocation(lat, lon float64) ([]domain.ConstituentParam, error) {
+	return nil, fmt.Errorf("%w: no valid constituents at (%.4f, %.4f)", store.ErrNoData, lat, lon)
+}
+
+// An inland coordinate is a data-coverage miss, not a server fault: it must
+// return 404 with a message a client (e.g. tides-swift) can show as-is.
+func TestGetTideParameters_LandLocationNotFound(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	uc := usecase.NewPredictionUseCase(landConstituentLoader{}, landConstituentLoader{}, nil)
+	r := gin.New()
+	r.GET("/v1/tides/parameters", NewHandler(uc).GetTideParameters)
+
+	// Gunma prefecture: inland.
+	w := doGetParameters(t, r, url.Values{paramLat: {"36.2572"}, paramLon: {"139.3759"}}.Encode())
+	if w.Code != nethttp.StatusNotFound {
+		t.Fatalf("expected 404, got %d (body: %s)", w.Code, w.Body.String())
+	}
+
+	var resp struct {
+		Error string `json:"error"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("unmarshal response: %v (body: %s)", err, w.Body.String())
+	}
+
+	want := "no tide data at (36.2572, 139.3759) - the location may be on land"
+	if resp.Error != want {
+		t.Errorf("error = %q, want %q", resp.Error, want)
 	}
 }
 
