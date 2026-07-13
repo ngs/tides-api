@@ -231,6 +231,12 @@ func (uc *PredictionUseCase) resolvePredictionParams(req PredictionRequest) (*re
 		source = sourceFES
 		constituents, err = (*uc.fesStore).LoadForLocation(*req.Lat, *req.Lon)
 		if err != nil {
+			// The model simply has no data here (typically a land cell): that is
+			// a 404, not a server error. Return early - the bathymetry lookups
+			// below would fail for the same reason and add nothing.
+			if errors.Is(err, store.ErrNoData) {
+				return nil, fmt.Errorf("%w: no tide data at (%.4f, %.4f) - the location may be on land", ErrNotFound, *req.Lat, *req.Lon)
+			}
 			return nil, fmt.Errorf("failed to load constituents for location (%.4f, %.4f): %w", *req.Lat, *req.Lon, err)
 		}
 	}

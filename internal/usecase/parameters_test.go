@@ -6,9 +6,11 @@ import (
 	"io/fs"
 	"math"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
+	"go.ngs.io/tides-api/internal/adapter/store"
 	"go.ngs.io/tides-api/internal/domain"
 )
 
@@ -248,5 +250,78 @@ func TestGetParameters_UnknownStationIsNotFound(t *testing.T) {
 	_, err := uc.GetParameters(ParametersRequest{StationID: ptrString("nosuchstation")})
 	if !errors.Is(err, ErrNotFound) {
 		t.Errorf("expected ErrNotFound, got %v", err)
+	}
+}
+
+// An inland coordinate has no FES data (every grid neighbour is a fill value):
+// the store reports store.ErrNoData, which must surface as ErrNotFound with a
+// human-readable message rather than as an internal error.
+func TestGetParameters_LandLocationIsNotFound(t *testing.T) {
+	resetAdjustmentTables(t)
+
+	loader := &mockConstituentLoader{
+		locationErr: fmt.Errorf("%w: no valid constituents at (36.2572, 139.3759)", store.ErrNoData),
+	}
+	uc := NewPredictionUseCase(loader, loader, nil)
+
+	// Gunma prefecture: inland, far from any FES water cell.
+	_, err := uc.GetParameters(ParametersRequest{Lat: ptrFloat(36.2572), Lon: ptrFloat(139.3759)})
+	if !errors.Is(err, ErrNotFound) {
+		t.Fatalf("expected ErrNotFound, got %v", err)
+	}
+
+	want := "not found: no tide data at (36.2572, 139.3759) - the location may be on land"
+	if err.Error() != want {
+		t.Errorf("error = %q, want %q", err.Error(), want)
+	}
+}
+
+// The prediction path shares resolvePredictionParams, so an inland coordinate
+// must be a 404 there too.
+func TestExecute_LandLocationIsNotFound(t *testing.T) {
+	resetAdjustmentTables(t)
+
+	loader := &mockConstituentLoader{
+		locationErr: fmt.Errorf("%w: no valid constituents at (36.2572, 139.3759)", store.ErrNoData),
+	}
+	uc := NewPredictionUseCase(loader, loader, nil)
+
+	start := time.Date(2025, 1, 1, 0, 0, 0, 0, time.UTC)
+	_, err := uc.Execute(PredictionRequest{
+		Lat:      ptrFloat(36.2572),
+		Lon:      ptrFloat(139.3759),
+		Start:    start,
+		End:      start.Add(24 * time.Hour),
+		Interval: 10 * time.Minute,
+	})
+	if !errors.Is(err, ErrNotFound) {
+		t.Fatalf("expected ErrNotFound, got %v", err)
+	}
+	if !strings.Contains(err.Error(), "may be on land") {
+		t.Errorf("error must explain the cause to the client, got %q", err.Error())
+	}
+}
+
+// A genuine internal failure (e.g. an unreadable NetCDF file) must NOT be
+// downgraded to a 404.
+func TestExecute_LocationLoadFailureIsInternal(t *testing.T) {
+	resetAdjustmentTables(t)
+
+	loader := &mockConstituentLoader{locationErr: errors.New("read grid: i/o error")}
+	uc := NewPredictionUseCase(loader, loader, nil)
+
+	start := time.Date(2025, 1, 1, 0, 0, 0, 0, time.UTC)
+	_, err := uc.Execute(PredictionRequest{
+		Lat:      ptrFloat(36.2572),
+		Lon:      ptrFloat(139.3759),
+		Start:    start,
+		End:      start.Add(24 * time.Hour),
+		Interval: 10 * time.Minute,
+	})
+	if err == nil {
+		t.Fatal("expected an error")
+	}
+	if errors.Is(err, ErrNotFound) || errors.Is(err, ErrValidation) {
+		t.Errorf("internal failure must not map to a typed client error, got %v", err)
 	}
 }

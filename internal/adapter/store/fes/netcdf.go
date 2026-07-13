@@ -2,6 +2,7 @@
 package fes
 
 import (
+	"errors"
 	"fmt"
 	"io/fs"
 	"log"
@@ -15,6 +16,7 @@ import (
 
 	"go.ngs.io/tides-api/internal/adapter/interp"
 	"go.ngs.io/tides-api/internal/adapter/ncio"
+	"go.ngs.io/tides-api/internal/adapter/store"
 	"go.ngs.io/tides-api/internal/domain"
 )
 
@@ -115,11 +117,24 @@ func (s *Store) LoadForLocation(lat, lon float64) ([]domain.ConstituentParam, er
 	// Load and interpolate each constituent.
 	params := make([]domain.ConstituentParam, 0, len(constituents))
 
+	// Track why constituents were skipped: if every failure was a lack of data
+	// coverage (land cell), the location has no tide data, which is a 404 case
+	// rather than an internal error.
+	var loadErrCount, noDataErrCount int
+
 	for _, constName := range constituents {
 		// Load constituent WITHOUT caching to avoid OOM.
 		// Each request reads only the 4 grid points needed for bilinear interpolation.
 		amplitude, phase, err := s.interpolateConstituentAtPoint(constName, lat, lon)
 		if err != nil {
+			loadErrCount++
+			if errors.Is(err, store.ErrNoData) {
+				// An expected coverage miss (land cell): every constituent hits it
+				// at the same location, so logging per constituent would flood the
+				// log for a routine 404. It is summarized once below instead.
+				noDataErrCount++
+				continue
+			}
 			// Skip constituents that fail to load, but log so failures are visible.
 			log.Printf("warning: skipping FES constituent %s at (%.4f, %.4f): %v", constName, lat, lon, err)
 			continue
@@ -140,7 +155,20 @@ func (s *Store) LoadForLocation(lat, lon float64) ([]domain.ConstituentParam, er
 		})
 	}
 
+	// Summarize coverage misses in a single line instead of one per constituent.
+	if noDataErrCount > 0 {
+		log.Printf("info: %d/%d FES constituents have no data coverage at (%.4f, %.4f)",
+			noDataErrCount, len(constituents), lat, lon)
+	}
+
 	if len(params) == 0 {
+		// Every constituent was skipped because its grid neighbourhood held only
+		// fill values: the location is outside the model's water coverage.
+		if loadErrCount > 0 && loadErrCount == noDataErrCount {
+			return nil, fmt.Errorf("%w: no valid constituents at (%.4f, %.4f)", store.ErrNoData, lat, lon)
+		}
+		// Otherwise at least one constituent failed for a different reason (or
+		// none could be resolved at all): treat it as an internal error.
 		return nil, fmt.Errorf("no valid constituents found for location (%.4f, %.4f)", lat, lon)
 	}
 
@@ -822,7 +850,9 @@ func bilinearInterpolateValid(lats, lons []float64, values [][]float64, lat, lon
 	}
 
 	if validCount == 0 {
-		return 0, fmt.Errorf("all grid points around (%.4f, %.4f) are fill values", lat, lon)
+		// A land cell (or an uncovered area), not an internal failure: tag it
+		// with store.ErrNoData so callers can answer 404 instead of 500.
+		return 0, fmt.Errorf("%w: all grid points around (%.4f, %.4f) are fill values", store.ErrNoData, lat, lon)
 	}
 	if sumW <= 0 {
 		// Valid points exist but carry zero bilinear weight (the query point
