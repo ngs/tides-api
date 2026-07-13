@@ -12,6 +12,11 @@ If you cannot (or do not want to) register with AVISO+, see [EOT20 (Registration
 
 ### 1. AVISO+ Account
 
+> **Before you download anything, read [DATA_LICENSING.md](DATA_LICENSING.md).**
+> Registering means accepting the [License to Use AVISO+ Products](https://www.aviso.altimetry.fr/fileadmin/documents/data/License_Aviso.pdf),
+> which decides what you may do with the data — heights vs currents, commercial
+> use, redistribution, and the credit line you are obliged to display.
+
 FES2014 data requires registration with AVISO+:
 
 1. Visit: https://www.aviso.altimetry.fr/
