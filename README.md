@@ -604,7 +604,7 @@ Contributions are welcome! Please:
 
 ## Data licensing
 
-Generated using AVISO+ Products.
+> Generated using AVISO+ Products
 
 The FES tidal model is **not** covered by this repository's MIT license. It is an
 AVISO+ Product with its own terms, which govern commercial use, redistribution

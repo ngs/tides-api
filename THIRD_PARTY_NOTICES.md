@@ -10,7 +10,7 @@ This software uses the following open source packages:
 
 ## FES2014/2022 tidal model (AVISO+)
 
-Generated using AVISO+ Products.
+> Generated using AVISO+ Products
 
 FES data is an AVISO+ Product, distributed under the "License to Use AVISO+
 Products" and not under this repository's MIT license. It requires registration
