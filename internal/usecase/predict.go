@@ -92,9 +92,9 @@ type PredictionResponse struct {
 	Extrema      ExtremaResponse   `json:"extrema"`
 	// MSL is the constant term applied to every predicted height, in meters.
 	// The harmonic constants are always MSL-referenced with zero mean, so this
-	// is 0 unless an explicit datum_offset_m was requested. Kept for backward
-	// compatibility.
-	MSL *float64 `json:"msl_m,omitempty"`
+	// is 0 unless an explicit datum_offset_m was requested. Always present;
+	// kept for backward compatibility.
+	MSL float64 `json:"msl_m"`
 	// ChartDatumOffsetM is how far chart datum (Z0) sits below MSL, in meters
 	// (non-negative). Add it to an MSL height to get a chart-datum height; this
 	// is exactly what datum=CD does server-side.
@@ -492,7 +492,6 @@ func (uc *PredictionUseCase) Execute(req PredictionRequest) (*PredictionResponse
 	// Build response. msl_m is the constant term actually applied to heights
 	// (0, or an explicit datum_offset_m); the reported datum reflects what was
 	// applied (MSL or CD).
-	msl := resolved.msl
 	response := &PredictionResponse{
 		Source:            source,
 		Datum:             datum,
@@ -500,7 +499,7 @@ func (uc *PredictionUseCase) Execute(req PredictionRequest) (*PredictionResponse
 		Constituents:      constituentNames,
 		Predictions:       predictionPoints,
 		ChartDatumOffsetM: roundToDecimal(resolved.chartDatumOffset),
-		MSL:               &msl,
+		MSL:               resolved.msl,
 		Extrema: ExtremaResponse{
 			Highs: highPoints,
 			Lows:  lowPoints,

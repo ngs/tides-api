@@ -56,7 +56,7 @@ func TestExecute_ChartDatumOffsetFallbackSumsPrincipalConstituents(t *testing.T)
 	if math.Abs(resp.ChartDatumOffsetM-wantZ0) > 1e-9 {
 		t.Errorf("chart_datum_offset_m = %v, want %v (Σ of M2+S2+K1+O1 only)", resp.ChartDatumOffsetM, wantZ0)
 	}
-	if resp.MSL == nil || *resp.MSL != 0 {
+	if resp.MSL != 0 {
 		t.Errorf("msl_m = %v, want 0", resp.MSL)
 	}
 	if resp.Datum != datumMSL {
@@ -164,7 +164,7 @@ func TestExecute_ExplicitDatumOffsetSetsMSL(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Execute failed: %v", err)
 	}
-	if resp.MSL == nil || math.Abs(*resp.MSL-offset) > 1e-9 {
+	if math.Abs(resp.MSL-offset) > 1e-9 {
 		t.Errorf("msl_m = %v, want %v", resp.MSL, offset)
 	}
 	// Zero-amplitude constituent: the whole height is the explicit offset.
