@@ -161,7 +161,7 @@ func TestGetParameters_StationUsesCSVPath(t *testing.T) {
 // A matching station override must surface its fitted intercept as the chart
 // datum offset (msl_m stays 0) and substitute the fitted constituents, exactly
 // as Execute does.
-func TestGetParameters_OverrideReplacesMSLAndConstituents(t *testing.T) {
+func TestGetParameters_OverrideSuppliesChartDatumOffsetAndConstituents(t *testing.T) {
 	resetAdjustmentTables(t)
 
 	const (

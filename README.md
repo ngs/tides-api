@@ -89,7 +89,7 @@ Notes:
 - The harmonic constants are always **MSL-referenced with zero mean**, so predicted heights are centred on mean sea level. `msl_m` is therefore `0` unless an explicit `datum_offset_m` is requested (kept for backward compatibility).
 - `chart_datum_offset_m` (non-negative, always present) is how far chart datum (Z0) sits below MSL. It is resolved, in order, from a matching JMA station override intercept, the nearest tabulated datum offset (within 80 km), or the `Σ(H_M2+H_S2+H_K1+H_O1)` fallback computed from the constituents (the JMA Z0 definition).
 - `datum=CD` adds `chart_datum_offset_m` to every `height_m` (predictions and extrema); `datum=MSL` leaves them 0-centred. The response `datum` field reports which was applied.
-- `depth_m` is `seabed_depth_m + MSL-referenced height`. The chart datum shift and the mean dynamic topography are never mixed into depth.
+- `depth_m` is `seabed_depth_m` plus the unshifted predicted height (which includes an explicit `datum_offset_m` when one is requested). The `datum=CD` shift and the mean dynamic topography are never mixed into depth, so under `datum=CD` `depth_m ≠ seabed_depth_m + height_m`.
 - When bathymetry supplies a mean dynamic topography (model MSL above the geoid, e.g. DTU21 MSS − EGM2008), it is reported as `meta.mdt_m` for information only and is never added to heights.
 
 **Example Request**:

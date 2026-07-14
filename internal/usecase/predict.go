@@ -205,8 +205,9 @@ func (r *PredictionRequest) Validate() error {
 
 // resolvedParams bundles the location-resolved prediction inputs shared by
 // Execute and GetParameters: the constituent set (with station overrides
-// applied), the effective MSL term (including override intercepts and datum
-// offsets), optional bathymetry metadata, and the phase reference epoch.
+// applied), the constant term (an explicit datum_offset_m only), the chart
+// datum offset (override intercept, auto datum offset, or amplitude-sum
+// fallback), optional bathymetry metadata, and the phase reference epoch.
 type resolvedParams struct {
 	source       string
 	constituents []domain.ConstituentParam
@@ -227,10 +228,11 @@ type resolvedParams struct {
 
 // resolvePredictionParams performs the location-dependent part of a
 // prediction: it loads constituents from the appropriate store, fetches
-// bathymetry metadata, applies station overrides and datum offsets to the MSL
-// term, and determines the phase reference epoch. Only the Lat/Lon/StationID,
-// Source and DatumOffsetM fields of req are consulted; location validation is
-// the caller's responsibility.
+// bathymetry metadata, resolves the chart datum offset (station override
+// intercept, auto datum offset, or amplitude-sum fallback), and determines
+// the phase reference epoch. Only the Lat/Lon/StationID, Source and
+// DatumOffsetM fields of req are consulted; location validation is the
+// caller's responsibility.
 //
 //nolint:gocyclo,nestif // Multiple conditional data-source and override paths.
 func (uc *PredictionUseCase) resolvePredictionParams(req PredictionRequest) (*resolvedParams, error) {
