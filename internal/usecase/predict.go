@@ -458,9 +458,10 @@ func (uc *PredictionUseCase) Execute(req PredictionRequest) (*PredictionResponse
 			Time:    level.Time.In(loc).Format(time.RFC3339),
 			HeightM: roundToDecimal(level.HeightM + datumShift),
 		}
-		// Water depth = seabed_depth + MSL-referenced tide height. The chart
-		// datum shift (datum=CD) and the mean dynamic topography are never mixed
-		// into depth.
+		// Water depth = seabed_depth + the unshifted predicted height (which
+		// includes an explicit datum_offset_m when one was requested). The
+		// chart datum shift (datum=CD) and the mean dynamic topography are
+		// never mixed into depth.
 		if seabedDepth != nil {
 			waterDepth := roundToDecimal(*seabedDepth + level.HeightM)
 			point.DepthM = &waterDepth
