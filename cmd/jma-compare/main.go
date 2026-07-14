@@ -1,6 +1,14 @@
 // Command jma-compare parses JMA fixed-width tide text and compares it
 // against the API predictions for a given day, reporting the mean offset
 // (recommended datum_offset_m) and RMSE around that mean.
+//
+// JMA observations are chart-datum (DL) referenced. The API returns
+// MSL-centred heights by default (datum=MSL), so the reported mean(JMA-API)
+// equals the chart datum offset (Z0 below MSL) - which is exactly the
+// recommended datum_offset_m. The RMSE is computed around that mean and is
+// therefore independent of the datum convention. To instead check absolute
+// agreement against DL, request the API with datum=CD in -api_url, which makes
+// the mean collapse toward 0.
 package main
 
 import (

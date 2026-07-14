@@ -52,8 +52,18 @@ func TestGetParameters_LatLonReturnsModelParameters(t *testing.T) {
 	if resp.StationID != nil {
 		t.Errorf("station_id must be omitted for lat/lon queries, got %q", *resp.StationID)
 	}
-	if math.Abs(resp.MSL-0.38) > 1e-9 {
-		t.Errorf("msl_m = %v, want 0.38", resp.MSL)
+	// msl_m is 0: the constants are MSL-referenced with zero mean. The model
+	// MSL (mean dynamic topography) is reported only as meta.mdt_m.
+	if resp.MSL != 0.0 {
+		t.Errorf("msl_m = %v, want 0", resp.MSL)
+	}
+	if resp.Meta["mdt_m"] != "0.380" {
+		t.Errorf("meta.mdt_m = %q, want %q", resp.Meta["mdt_m"], "0.380")
+	}
+	// No override or auto offset here, so the chart datum offset falls back to
+	// the Σ(H_M2+H_S2+H_K1+H_O1) proxy; only M2 (0.51) is present.
+	if math.Abs(resp.ChartDatumOffsetM-0.51) > 1e-9 {
+		t.Errorf("chart_datum_offset_m = %v, want 0.51", resp.ChartDatumOffsetM)
 	}
 	if resp.SeabedDepth == nil || math.Abs(*resp.SeabedDepth-2.64) > 1e-9 {
 		t.Errorf("seabed_depth_m = %v, want 2.64", resp.SeabedDepth)
@@ -148,9 +158,10 @@ func TestGetParameters_StationUsesCSVPath(t *testing.T) {
 	}
 }
 
-// A matching station override must replace the model MSL with the fitted
-// intercept and substitute the fitted constituents, exactly as Execute does.
-func TestGetParameters_OverrideReplacesMSLAndConstituents(t *testing.T) {
+// A matching station override must surface its fitted intercept as the chart
+// datum offset (msl_m stays 0) and substitute the fitted constituents, exactly
+// as Execute does.
+func TestGetParameters_OverrideSuppliesChartDatumOffsetAndConstituents(t *testing.T) {
 	resetAdjustmentTables(t)
 
 	const (
@@ -185,9 +196,13 @@ func TestGetParameters_OverrideReplacesMSLAndConstituents(t *testing.T) {
 		t.Fatalf("GetParameters failed: %v", err)
 	}
 
-	// The override intercept replaces the model MSL.
-	if math.Abs(resp.MSL-intercept) > 1e-9 {
-		t.Errorf("msl_m = %v, want %v (override intercept must replace model MSL)", resp.MSL, intercept)
+	// Heights are MSL-centred (msl_m = 0); the override intercept becomes the
+	// chart datum offset and the model MSL is excluded from both.
+	if resp.MSL != 0.0 {
+		t.Errorf("msl_m = %v, want 0", resp.MSL)
+	}
+	if math.Abs(resp.ChartDatumOffsetM-intercept) > 1e-9 {
+		t.Errorf("chart_datum_offset_m = %v, want %v (override intercept)", resp.ChartDatumOffsetM, intercept)
 	}
 
 	if len(resp.Constituents) != 1 {

@@ -53,14 +53,16 @@ func flatConstituents() []domain.ConstituentParam {
 	}
 }
 
-// Regression test for: depth_m double-counts MSL. CalculateTideHeight already includes
-// MSL in HeightM (height starts at params.MSL), so water depth must be
-// seabed_depth + HeightM, not seabed_depth + msl + HeightM.
-func TestExecute_DepthDoesNotDoubleCountMSL(t *testing.T) {
+// Regression test for: the model MSL / mean dynamic topography must not be
+// mixed into heights or depth. Heights are MSL-centred (HeightM == 0 with zero
+// amplitude), and water depth is seabed_depth + MSL-referenced height, so the
+// MDT never appears in either. depth_m must be seabed_depth + HeightM, not
+// seabed_depth + mdt + HeightM.
+func TestExecute_DepthExcludesMDT(t *testing.T) {
 	loader := &mockConstituentLoader{constituents: flatConstituents()}
 	bathy := &mockBathymetryStore{
 		meta: &domain.LocationMetadata{
-			MSL:    1.0,
+			MSL:    1.0, // Mean dynamic topography, reported as meta.mdt_m only.
 			DepthM: ptrFloat(10.0),
 		},
 	}
@@ -84,17 +86,20 @@ func TestExecute_DepthDoesNotDoubleCountMSL(t *testing.T) {
 	}
 
 	p := resp.Predictions[0]
-	// With zero amplitude, HeightM == MSL == 1.0.
-	if math.Abs(p.HeightM-1.0) > 1e-9 {
-		t.Fatalf("precondition failed: expected HeightM 1.0 (== MSL), got %v", p.HeightM)
+	// With zero amplitude and MSL-centred heights, HeightM == 0 (MDT excluded).
+	if math.Abs(p.HeightM) > 1e-9 {
+		t.Fatalf("precondition failed: expected HeightM 0 (MDT excluded), got %v", p.HeightM)
 	}
 	if p.DepthM == nil {
 		t.Fatal("expected DepthM to be set")
 	}
 
-	// Correct: depth = seabed_depth + HeightM = 10.0 + 1.0 = 11.0 (MSL already in HeightM).
-	if math.Abs(*p.DepthM-11.0) > 1e-9 {
-		t.Errorf("depth_m double-counts MSL: expected 11.0 (seabed 10.0 + height 1.0), got %v", *p.DepthM)
+	// Correct: depth = seabed_depth + HeightM = 10.0 + 0 = 10.0 (MDT excluded).
+	if math.Abs(*p.DepthM-10.0) > 1e-9 {
+		t.Errorf("depth_m mixes in MDT: expected 10.0 (seabed 10.0 + height 0), got %v", *p.DepthM)
+	}
+	if resp.Meta["mdt_m"] != "1.000" {
+		t.Errorf("meta.mdt_m = %q, want %q", resp.Meta["mdt_m"], "1.000")
 	}
 }
 
