@@ -213,3 +213,43 @@ func TestGetPredictions_LatWithoutLonRejectedExplicitly(t *testing.T) {
 		}
 	})
 }
+
+// The datum query parameter must be honoured end-to-end: a valid datum=CD
+// request succeeds and reports the applied datum, while an unsupported value is
+// rejected with 400 before any computation.
+func TestGetPredictions_DatumParameter(t *testing.T) {
+	r := newTestRouter(t)
+
+	t.Run("datum=CD succeeds and echoes applied datum", func(t *testing.T) {
+		q := url.Values{
+			paramStationID: {testStation},
+			paramStart:     {testStart},
+			paramEnd:       {testEnd},
+			"datum":        {"CD"},
+		}
+		w := doGet(t, r, q.Encode())
+		if w.Code != nethttp.StatusOK {
+			t.Fatalf("expected 200 OK, got %d (body: %s)", w.Code, w.Body.String())
+		}
+		body := w.Body.String()
+		if !strings.Contains(body, `"datum":"CD"`) {
+			t.Errorf(`response must report datum "CD"; got: %s`, body)
+		}
+		if !strings.Contains(body, `"chart_datum_offset_m"`) {
+			t.Errorf("response must include chart_datum_offset_m; got: %s", body)
+		}
+	})
+
+	t.Run("unsupported datum is 400", func(t *testing.T) {
+		q := url.Values{
+			paramStationID: {testStation},
+			paramStart:     {testStart},
+			paramEnd:       {testEnd},
+			"datum":        {"LAT"},
+		}
+		w := doGet(t, r, q.Encode())
+		if w.Code != nethttp.StatusBadRequest {
+			t.Errorf("expected 400 Bad Request for unsupported datum, got %d (body: %s)", w.Code, w.Body.String())
+		}
+	})
+}

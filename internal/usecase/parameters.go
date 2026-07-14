@@ -47,23 +47,35 @@ type ConstituentParameter struct {
 // station so that clients can compute tide heights locally. See GetParameters
 // for the computation contract.
 type ParametersResponse struct {
-	Location      *LocationPoint         `json:"location,omitempty"`
-	StationID     *string                `json:"station_id,omitempty"`
-	Source        string                 `json:"source"`
-	Datum         string                 `json:"datum"`
-	MSL           float64                `json:"msl_m"`
-	SeabedDepth   *float64               `json:"seabed_depth_m,omitempty"`
-	ReferenceTime string                 `json:"reference_time"`
-	Constituents  []ConstituentParameter `json:"constituents"`
-	Meta          map[string]string      `json:"meta"`
+	Location  *LocationPoint `json:"location,omitempty"`
+	StationID *string        `json:"station_id,omitempty"`
+	Source    string         `json:"source"`
+	Datum     string         `json:"datum"`
+	// MSL is the constant term of the height formula. The constants are
+	// MSL-referenced with zero mean, so this is 0 (kept for compatibility).
+	MSL float64 `json:"msl_m"`
+	// ChartDatumOffsetM is how far chart datum (Z0) sits below MSL, in meters
+	// (non-negative); add it to an MSL height for a chart-datum height.
+	ChartDatumOffsetM float64                `json:"chart_datum_offset_m"`
+	SeabedDepth       *float64               `json:"seabed_depth_m,omitempty"`
+	ReferenceTime     string                 `json:"reference_time"`
+	Constituents      []ConstituentParameter `json:"constituents"`
+	Meta              map[string]string      `json:"meta"`
 }
 
 // GetParameters returns the harmonic constants used for tide prediction at a
 // location or station, allowing clients to compute tide heights locally.
 //
-// Computation contract - a client reconstructs the tide height as
+// Computation contract - a client reconstructs the MSL-referenced tide height as
 //
 //	h(t) = msl_m + Σ f_k(t) · A_k · cos(ω_k·Δt + V_k + u_k(t) − φ_k)
+//
+// The harmonic constants have zero mean, so msl_m is 0 and h(t) is centred on
+// mean sea level. To express heights relative to chart datum (Z0), add
+// chart_datum_offset_m: h_CD(t) = h(t) + chart_datum_offset_m. The offset is
+// non-negative (chart datum sits at or below MSL). The separate mdt_m in meta
+// is the mean dynamic topography (model MSL above the geoid) and is never part
+// of the height formula.
 //
 // where, per constituent k:
 //   - A_k is amplitude_m and φ_k is phase_deg (Greenwich phase lag),
@@ -120,11 +132,12 @@ func (uc *PredictionUseCase) GetParameters(req ParametersRequest) (*ParametersRe
 	}
 
 	response := &ParametersResponse{
-		Source:        resolved.source,
-		Datum:         datumMSL,
-		MSL:           resolved.msl,
-		ReferenceTime: resolved.refTime.Format(time.RFC3339),
-		Constituents:  constituents,
+		Source:            resolved.source,
+		Datum:             datumMSL,
+		MSL:               resolved.msl,
+		ChartDatumOffsetM: roundToDecimal(resolved.chartDatumOffset),
+		ReferenceTime:     resolved.refTime.Format(time.RFC3339),
+		Constituents:      constituents,
 		Meta: map[string]string{
 			"model": "harmonic_v0",
 		},
@@ -149,6 +162,12 @@ func (uc *PredictionUseCase) GetParameters(req ParametersRequest) (*ParametersRe
 		if resolved.metadata.SourceName != "" {
 			response.Meta["metadata_source"] = resolved.metadata.SourceName
 		}
+	}
+
+	// Report the mean dynamic topography (model MSL above the geoid) for
+	// information only; it is not part of the height formula.
+	if resolved.mdt != 0.0 {
+		response.Meta["mdt_m"] = fmt.Sprintf("%.3f", resolved.mdt)
 	}
 
 	// Add attribution based on source (same as predictions).

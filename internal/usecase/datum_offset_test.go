@@ -42,11 +42,12 @@ func resetAdjustmentTables(t *testing.T) {
 
 // Regression test for: when a location matches both a JMA datum offset entry
 // (data/jma_datum_offsets.json, applied via getAutoDatumOffset) and a station
-// override with datum_offset_m (data/jma_station_overrides.json, applied as
-// the base MSL term in Execute), the same fitted offset was added twice.
-// Predictions near every JMA station were biased by a full extra datum offset
-// (~1m scale). The offset must be applied exactly once.
-func TestExecute_DatumOffsetNotDoubleCountedWithStationOverride(t *testing.T) {
+// override with datum_offset_m (data/jma_station_overrides.json), the same
+// fitted offset must resolve to the chart datum offset exactly once - not
+// doubled. Under the MSL-centred contract the offset never shifts heights
+// (default datum=MSL stays 0-centred); it surfaces as chart_datum_offset_m and,
+// with datum=CD, as the amount added to every height.
+func TestExecute_ChartDatumOffsetNotDoubleCountedWithStationOverride(t *testing.T) {
 	resetAdjustmentTables(t)
 
 	const (
@@ -73,48 +74,60 @@ func TestExecute_DatumOffsetNotDoubleCountedWithStationOverride(t *testing.T) {
 	t.Setenv("DATUM_OFFSETS_PATH", datumPath)
 	t.Setenv("STATION_OVERRIDES_PATH", overridesPath)
 
-	// Zero-amplitude constituents make every predicted height equal to the MSL
-	// term, which isolates the applied datum offset.
+	// Zero-amplitude constituents make every MSL-referenced height exactly 0,
+	// which isolates the chart datum offset applied under datum=CD.
 	loader := &mockConstituentLoader{constituents: []domain.ConstituentParam{
 		{Name: "M2", AmplitudeM: 0, PhaseDeg: 0, SpeedDegPerHr: 28.9841042},
 	}}
 	uc := NewPredictionUseCase(loader, loader, nil)
 
 	reqLat, reqLon := lat, lon
-	resp, err := uc.Execute(PredictionRequest{
+	base := PredictionRequest{
 		Lat:      &reqLat,
 		Lon:      &reqLon,
 		Start:    time.Date(2025, 6, 1, 0, 0, 0, 0, time.UTC),
 		End:      time.Date(2025, 6, 1, 2, 0, 0, 0, time.UTC),
 		Interval: time.Hour,
-	})
+	}
+
+	resp, err := uc.Execute(base)
 	if err != nil {
 		t.Fatalf("Execute failed: %v", err)
 	}
 	if len(resp.Predictions) == 0 {
 		t.Fatal("no predictions returned")
 	}
-	got := resp.Predictions[0].HeightM
-	if got != offset {
-		t.Errorf("datum offset applied %.1f times: height = %.3f, want %.3f (offset applied exactly once)",
+	if got := resp.ChartDatumOffsetM; got != offset {
+		t.Errorf("chart_datum_offset_m applied %.1f times: got %.3f, want %.3f (resolved exactly once)",
 			got/offset, got, offset)
+	}
+	if got := resp.Predictions[0].HeightM; got != 0 {
+		t.Errorf("datum=MSL height = %.3f, want 0 (heights are MSL-centred)", got)
+	}
+
+	cdReq := base
+	cdReq.Datum = "CD"
+	cdResp, err := uc.Execute(cdReq)
+	if err != nil {
+		t.Fatalf("Execute (datum=CD) failed: %v", err)
+	}
+	if got := cdResp.Predictions[0].HeightM; got != offset {
+		t.Errorf("datum=CD height = %.3f, want %.3f (offset added exactly once)", got, offset)
 	}
 }
 
-// Regression test for: when bathymetry provides a model MSL (DTU21 MSS,
-// geoid-corrected) and a station override with datum_offset_m matches, the
-// override's fitted intercept was ADDED to the model MSL. The intercept is the
-// full constant term relative to the JMA datum (mean sea level above DL), so
-// stacking the model MSL on top shifts every height by metadata.MSL
-// (~0.38 m at Kisarazu in production). The override intercept must REPLACE the
-// model MSL, not add to it.
-func TestExecute_OverrideDatumReplacesModelMSL(t *testing.T) {
+// Regression test for: when bathymetry provides a model MSL / mean dynamic
+// topography (DTU21 MSS − EGM2008) and a station override with datum_offset_m
+// matches, the MDT must NOT be mixed into heights, and the override intercept
+// (mean sea level above DL) must become the chart datum offset. Heights stay
+// MSL-centred; the MDT is reported only as meta.mdt_m.
+func TestExecute_ChartDatumFromOverrideExcludesMDT(t *testing.T) {
 	resetAdjustmentTables(t)
 
 	const (
 		lat       = 35.38153
 		lon       = 139.867951
-		modelMSL  = 0.38 // DTU21 MSS geoid-corrected sea surface height.
+		modelMSL  = 0.38 // DTU21 MSS geoid-corrected sea surface height (MDT).
 		intercept = 1.15 // jma-harmonics fitted constant (MSL above DL).
 	)
 
@@ -152,10 +165,14 @@ func TestExecute_OverrideDatumReplacesModelMSL(t *testing.T) {
 	if len(resp.Predictions) == 0 {
 		t.Fatal("no predictions returned")
 	}
-	got := resp.Predictions[0].HeightM
-	if got != intercept {
-		t.Errorf("height = %.3f, want %.3f (override intercept must replace the model MSL %.2f, not stack on it)",
-			got, intercept, modelMSL)
+	if got := resp.Predictions[0].HeightM; got != 0 {
+		t.Errorf("height = %.3f, want 0 (MDT %.2f must not shift heights)", got, modelMSL)
+	}
+	if got := resp.ChartDatumOffsetM; got != intercept {
+		t.Errorf("chart_datum_offset_m = %.3f, want %.3f (override intercept)", got, intercept)
+	}
+	if got := resp.Meta["mdt_m"]; got != "0.380" {
+		t.Errorf("meta.mdt_m = %q, want %q", got, "0.380")
 	}
 }
 

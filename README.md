@@ -69,9 +69,9 @@ make docker-run
 | `start` | string | Yes | Start time (RFC3339) | `2025-10-21T00:00:00Z` |
 | `end` | string | Yes | End time (RFC3339) | `2025-10-21T12:00:00Z` |
 | `interval` | string | No | Time interval (default: 30m) | `10m`, `1h` |
-| `datum` | string | No | Vertical datum (default: MSL) | `MSL`, `LAT` |
+| `datum` | string | No | Output vertical datum: `MSL` (default, 0-centred) or `CD` (chart datum, heights raised by `chart_datum_offset_m`) | `MSL`, `CD` |
 | `source` | string | No | Data source (auto-detect) | `csv`, `fes` |
-| `datum_offset_m` | float | No | Constant vertical offset [m] applied to all predicted heights | `0.768` |
+| `datum_offset_m` | float | No | Constant vertical offset [m] applied to all predicted heights (surfaces as `msl_m`) | `0.768` |
 | `timezone` | string | No | Output timezone: `utc`, `jst`, or an IANA name | `utc`, `jst`, `Asia/Tokyo` |
 | `phase_convention` | string | No | Phase convention (`fes_greenwich` default, or `vu`) | `fes_greenwich`, `vu` |
 
@@ -82,6 +82,15 @@ Notes:
 - `lat` and `lon` must both be provided; supplying only one returns `400` with `"latitude and longitude must both be provided"`.
 - `source=fes` cannot be combined with `station_id`, and `source=csv` cannot be combined with `lat`/`lon` (both return `400`).
 - An unrecognized `timezone` value returns `400`.
+- An unsupported `datum` value (anything other than `MSL`/`CD`) returns `400`.
+
+**Vertical datum semantics**:
+
+- The harmonic constants are always **MSL-referenced with zero mean**, so predicted heights are centred on mean sea level. `msl_m` is therefore `0` unless an explicit `datum_offset_m` is requested (kept for backward compatibility).
+- `chart_datum_offset_m` (non-negative, always present) is how far chart datum (Z0) sits below MSL. It is resolved, in order, from a matching JMA station override intercept, the nearest tabulated datum offset (within 80 km), or the `Σ(H_M2+H_S2+H_K1+H_O1)` fallback computed from the constituents (the JMA Z0 definition).
+- `datum=CD` adds `chart_datum_offset_m` to every `height_m` (predictions and extrema); `datum=MSL` leaves them 0-centred. The response `datum` field reports which was applied.
+- `depth_m` is `seabed_depth_m + MSL-referenced height`. The chart datum shift and the mean dynamic topography are never mixed into depth.
+- When bathymetry supplies a mean dynamic topography (model MSL above the geoid, e.g. DTU21 MSS − EGM2008), it is reported as `meta.mdt_m` for information only and is never added to heights.
 
 **Example Request**:
 
@@ -110,6 +119,8 @@ curl 'http://localhost:8080/v1/tides/predictions?station_id=tokyo&start=2025-10-
       {"time": "2025-10-21T09:42:00Z", "height_m": -0.187}
     ]
   },
+  "msl_m": 0,
+  "chart_datum_offset_m": 1.15,
   "meta": {
     "model": "harmonic_v0",
     "attribution": "Mock CSV (for dev). Replace with FES later."
@@ -133,10 +144,14 @@ Errors are returned as `{"error": "<message>"}` with one of the following status
 
 Returns the harmonic constants for a location or station so clients can compute tide heights locally as
 `h(t) = msl_m + Σ f_k(t)·A_k·cos(ω_k·Δt + V_k + u_k(t) − φ_k)`, where `Δt` is hours since `reference_time`.
+The constants are MSL-referenced with zero mean, so `msl_m` is `0` and `h(t)` is centred on mean sea level.
+To express heights relative to chart datum, add `chart_datum_offset_m`: `h_CD(t) = h(t) + chart_datum_offset_m`
+(this is exactly what `datum=CD` does on the predictions endpoint). `chart_datum_offset_m` is non-negative.
 `V_k` is `equilibrium_argument_deg`: the Greenwich equilibrium argument the server evaluates once at the
 absolute instant `reference_time` (expressed as hours since the Unix epoch), so it is a constant of the
 response rather than a function of `t`. `f_k(t)`/`u_k(t)` are the nodal corrections, which the client
-computes from the astronomical arguments at the absolute prediction time `t`.
+computes from the astronomical arguments at the absolute prediction time `t`. A `meta.mdt_m` field, when
+present, is the mean dynamic topography (model MSL above the geoid) and is never part of the height formula.
 
 **Query Parameters**: `station_id` OR `lat`+`lon` (mutually exclusive, same validation as predictions), optional `source` (`csv`/`fes`). No time parameters are required.
 
@@ -153,14 +168,15 @@ curl 'http://localhost:8080/v1/tides/parameters?lat=35.38&lon=139.87'
   "location": {"lat": 35.38, "lon": 139.87},
   "source": "fes",
   "datum": "MSL",
-  "msl_m": 1.15,
+  "msl_m": 0,
+  "chart_datum_offset_m": 1.15,
   "seabed_depth_m": 2.64,
   "reference_time": "2012-01-01T00:00:00Z",
   "constituents": [
     {"name": "M2", "speed_deg_per_hr": 28.9841042, "amplitude_m": 0.51,
      "phase_deg": 133.1, "equilibrium_argument_deg": 288.4}
   ],
-  "meta": {"model": "harmonic_v0", "attribution": "FES2014/2022 tidal model"}
+  "meta": {"model": "harmonic_v0", "attribution": "FES2014/2022 tidal model", "mdt_m": "0.380"}
 }
 ```
 

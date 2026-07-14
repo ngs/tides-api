@@ -7,6 +7,7 @@ import (
 	"io/fs"
 	"log"
 	"math"
+	"strings"
 	"time"
 
 	"go.ngs.io/tides-api/internal/adapter/store"
@@ -18,9 +19,22 @@ const (
 	sourceCSV = "csv"
 	sourceFES = "fes"
 
-	// datumMSL is the default vertical datum label in responses.
+	// datumMSL is the default vertical datum label in responses. Predicted
+	// heights are centred on mean sea level (the harmonic constants have zero
+	// mean).
 	datumMSL = "MSL"
+	// datumCD labels heights expressed relative to chart datum (Z0), obtained by
+	// adding chart_datum_offset_m to the MSL-referenced height.
+	datumCD = "CD"
 )
+
+// chartDatumConstituents are the four constituents summed to estimate the chart
+// datum depth Z0 below MSL (the JMA Z0 definition, H_M2 + H_S2 + H_K1 + H_O1)
+// when no fitted or tabulated offset is available. This mirrors the
+// conventional lowest-astronomical-tide proxy used for nautical chart datums.
+//
+//nolint:gochecknoglobals // Intentional: constant lookup set for the Z0 sum.
+var chartDatumConstituents = map[string]bool{"M2": true, "S2": true, "K1": true, "O1": true}
 
 // Sentinel errors that let transport layers (HTTP handlers) map failures to
 // the right status code via errors.Is without duplicating business rules.
@@ -76,9 +90,17 @@ type PredictionResponse struct {
 	Constituents []string          `json:"constituents"`
 	Predictions  []PredictionPoint `json:"predictions"`
 	Extrema      ExtremaResponse   `json:"extrema"`
-	MSL          *float64          `json:"msl_m,omitempty"`          // Mean Sea Level in meters.
-	SeabedDepth  *float64          `json:"seabed_depth_m,omitempty"` // Seabed depth in meters (positive value).
-	Meta         map[string]string `json:"meta"`
+	// MSL is the constant term applied to every predicted height, in meters.
+	// The harmonic constants are always MSL-referenced with zero mean, so this
+	// is 0 unless an explicit datum_offset_m was requested. Kept for backward
+	// compatibility.
+	MSL *float64 `json:"msl_m,omitempty"`
+	// ChartDatumOffsetM is how far chart datum (Z0) sits below MSL, in meters
+	// (non-negative). Add it to an MSL height to get a chart-datum height; this
+	// is exactly what datum=CD does server-side.
+	ChartDatumOffsetM float64  `json:"chart_datum_offset_m"`
+	SeabedDepth       *float64 `json:"seabed_depth_m,omitempty"` // Seabed depth in meters (positive value).
+	Meta              map[string]string `json:"meta"`
 }
 
 // PredictionPoint represents a single tide height prediction.
@@ -189,8 +211,18 @@ type resolvedParams struct {
 	source       string
 	constituents []domain.ConstituentParam
 	metadata     *domain.LocationMetadata
-	msl          float64
-	refTime      time.Time
+	// msl is the constant term added to the harmonic sum. It is 0 for the
+	// MSL-referenced prediction and carries only an explicit request
+	// DatumOffsetM when one is provided.
+	msl float64
+	// chartDatumOffset is the non-negative depth of chart datum (Z0) below MSL.
+	// It comes from the matching station override intercept, an auto datum
+	// offset, or the Σ(H_M2+H_S2+H_K1+H_O1) fallback, in that order.
+	chartDatumOffset float64
+	// mdt is the mean dynamic topography (model MSL above the geoid, e.g. DTU21
+	// MSS − EGM2008) reported for information only; it is never added to heights.
+	mdt     float64
+	refTime time.Time
 }
 
 // resolvePredictionParams performs the location-dependent part of a
@@ -252,37 +284,52 @@ func (uc *PredictionUseCase) resolvePredictionParams(req PredictionRequest) (*re
 		}
 	}
 
-	// Set up prediction parameters.
-	msl := 0.0
+	// The harmonic constants are always MSL-referenced (zero mean), so the
+	// constant term is 0 by default. The model MSL (mean dynamic topography) is
+	// reported separately as mdt and never added to heights.
+	mdt := 0.0
 	if metadata != nil {
-		msl = metadata.MSL
+		mdt = metadata.MSL
 	}
 
-	// A matching station override supplies the fitted constituents and its
-	// datum offset. The fitted intercept is the FULL constant term relative to
-	// the JMA datum (mean sea level above DL), so it replaces the model MSL
-	// rather than stacking on it.
+	// A matching station override supplies the fitted constituents; its fitted
+	// intercept (mean sea level above the JMA datum, i.e. the chart datum depth
+	// below MSL) becomes the chart datum offset rather than a height shift.
 	var override *stationOverrideEntry
 	if req.Lat != nil && req.Lon != nil {
 		override, _ = getStationOverride(*req.Lat, *req.Lon)
 	}
-	if override != nil && override.DatumOffset != nil {
-		msl = *override.DatumOffset
+	constituents = applyOverrideConstituents(override, constituents)
+
+	// Resolve the chart datum offset (Z0 below MSL), in precedence order:
+	//   1. a matching station override's fitted intercept,
+	//   2. the nearest tabulated auto datum offset (JMA DL/TP within 80 km),
+	//   3. the Σ(H_M2+H_S2+H_K1+H_O1) fallback computed from the constituents.
+	// The result is clamped to be non-negative, as chart datum sits at or below
+	// MSL by construction.
+	var chartDatumOffset float64
+	autoOffset, autoOK := 0.0, false
+	if req.Lat != nil && req.Lon != nil {
+		autoOffset, autoOK = getAutoDatumOffset(*req.Lat, *req.Lon)
+	}
+	switch {
+	case override != nil && override.DatumOffset != nil:
+		chartDatumOffset = *override.DatumOffset
+	case autoOK:
+		chartDatumOffset = autoOffset
+	default:
+		chartDatumOffset = computeChartDatumOffset(constituents)
+	}
+	if chartDatumOffset < 0 {
+		chartDatumOffset = 0
 	}
 
-	// Apply optional datum offset (e.g., to align with JMA DL/TP).
+	// The constant term stays 0 unless the caller asks for an explicit vertical
+	// offset (kept for backward compatibility with datum_offset_m).
+	msl := 0.0
 	if req.DatumOffsetM != nil {
 		msl += *req.DatumOffsetM
-	} else if req.Lat != nil && req.Lon != nil && override == nil {
-		// Auto datum offset: apply the nearest known offset (e.g., JMA DL/TP),
-		// but only when no station override matches - the override's own
-		// datum offset comes from the same JMA fit and must not be added twice.
-		if off, ok := getAutoDatumOffset(*req.Lat, *req.Lon); ok {
-			msl += off
-		}
 	}
-
-	constituents = applyOverrideConstituents(override, constituents)
 
 	// Reference time: use FES epoch for FES source to align phases, else Unix epoch.
 	refTime := time.Unix(0, 0).UTC()
@@ -292,12 +339,27 @@ func (uc *PredictionUseCase) resolvePredictionParams(req PredictionRequest) (*re
 	}
 
 	return &resolvedParams{
-		source:       source,
-		constituents: constituents,
-		metadata:     metadata,
-		msl:          msl,
-		refTime:      refTime,
+		source:           source,
+		constituents:     constituents,
+		metadata:         metadata,
+		msl:              msl,
+		chartDatumOffset: chartDatumOffset,
+		mdt:              mdt,
+		refTime:          refTime,
 	}, nil
+}
+
+// computeChartDatumOffset estimates the chart datum depth below MSL as the sum
+// of the four principal constituent amplitudes Σ(H_M2+H_S2+H_K1+H_O1), matching
+// the JMA Z0 definition. Constituents not present simply contribute nothing.
+func computeChartDatumOffset(constituents []domain.ConstituentParam) float64 {
+	var sum float64
+	for _, c := range constituents {
+		if chartDatumConstituents[c.Name] {
+			sum += math.Abs(c.AmplitudeM)
+		}
+	}
+	return sum
 }
 
 // Execute performs the tide prediction.
@@ -309,6 +371,13 @@ func (uc *PredictionUseCase) Execute(req PredictionRequest) (*PredictionResponse
 		return nil, fmt.Errorf("%w: %v", ErrValidation, err)
 	}
 
+	// Resolve and validate the requested output datum before any heavy work so
+	// an unsupported value fails fast with a 400.
+	datum, err := resolveDatum(req.Datum)
+	if err != nil {
+		return nil, err
+	}
+
 	resolved, err := uc.resolvePredictionParams(req)
 	if err != nil {
 		return nil, err
@@ -316,6 +385,15 @@ func (uc *PredictionUseCase) Execute(req PredictionRequest) (*PredictionResponse
 	source := resolved.source
 	constituents := resolved.constituents
 	metadata := resolved.metadata
+
+	// datum=CD expresses heights relative to chart datum by adding the
+	// (non-negative) chart datum offset to every MSL-referenced height. Water
+	// depth always uses the MSL height, so the offset is applied only to the
+	// reported height_m.
+	datumShift := 0.0
+	if datum == datumCD {
+		datumShift = resolved.chartDatumOffset
+	}
 
 	// Set longitude for Greenwich phase correction (only for lat/lon queries).
 	lon := 0.0
@@ -369,56 +447,38 @@ func (uc *PredictionUseCase) Execute(req PredictionRequest) (*PredictionResponse
 	extrema := domain.RefineExtrema(precisePredictions, domain.FindExtrema(precisePredictions))
 
 	// Convert to response format.
+	seabedDepth := (*float64)(nil)
+	if metadata != nil {
+		seabedDepth = metadata.DepthM
+	}
+	toPoint := func(level domain.TideLevel) PredictionPoint {
+		point := PredictionPoint{
+			Time:    level.Time.In(loc).Format(time.RFC3339),
+			HeightM: roundToDecimal(level.HeightM + datumShift),
+		}
+		// Water depth = seabed_depth + MSL-referenced tide height. The chart
+		// datum shift (datum=CD) and the mean dynamic topography are never mixed
+		// into depth.
+		if seabedDepth != nil {
+			waterDepth := roundToDecimal(*seabedDepth + level.HeightM)
+			point.DepthM = &waterDepth
+		}
+		return point
+	}
+
 	predictionPoints := make([]PredictionPoint, len(predictions))
 	for i, p := range predictions {
-		point := PredictionPoint{
-			Time:    p.Time.In(loc).Format(time.RFC3339),
-			HeightM: roundToDecimal(p.HeightM),
-		}
-
-		// Calculate water depth if seabed depth is available.
-		// Water depth = seabed_depth + tide_height (HeightM already includes MSL).
-		if metadata != nil && metadata.DepthM != nil {
-			waterDepth := *metadata.DepthM + p.HeightM
-			roundedDepth := roundToDecimal(waterDepth)
-			point.DepthM = &roundedDepth
-		}
-
-		predictionPoints[i] = point
+		predictionPoints[i] = toPoint(p)
 	}
 
 	highPoints := make([]PredictionPoint, len(extrema.Highs))
 	for i, h := range extrema.Highs {
-		point := PredictionPoint{
-			Time:    h.Time.In(loc).Format(time.RFC3339),
-			HeightM: roundToDecimal(h.HeightM),
-		}
-
-		// Calculate water depth if seabed depth is available.
-		if metadata != nil && metadata.DepthM != nil {
-			waterDepth := *metadata.DepthM + h.HeightM
-			roundedDepth := roundToDecimal(waterDepth)
-			point.DepthM = &roundedDepth
-		}
-
-		highPoints[i] = point
+		highPoints[i] = toPoint(h)
 	}
 
 	lowPoints := make([]PredictionPoint, len(extrema.Lows))
 	for i, l := range extrema.Lows {
-		point := PredictionPoint{
-			Time:    l.Time.In(loc).Format(time.RFC3339),
-			HeightM: roundToDecimal(l.HeightM),
-		}
-
-		// Calculate water depth if seabed depth is available.
-		if metadata != nil && metadata.DepthM != nil {
-			waterDepth := *metadata.DepthM + l.HeightM
-			roundedDepth := roundToDecimal(waterDepth)
-			point.DepthM = &roundedDepth
-		}
-
-		lowPoints[i] = point
+		lowPoints[i] = toPoint(l)
 	}
 
 	// Extract constituent names.
@@ -427,19 +487,18 @@ func (uc *PredictionUseCase) Execute(req PredictionRequest) (*PredictionResponse
 		constituentNames[i] = c.Name
 	}
 
-	// Determine datum.
-	datum := req.Datum
-	if datum == "" {
-		datum = datumMSL
-	}
-
-	// Build response.
+	// Build response. msl_m is the constant term actually applied to heights
+	// (0, or an explicit datum_offset_m); the reported datum reflects what was
+	// applied (MSL or CD).
+	msl := resolved.msl
 	response := &PredictionResponse{
-		Source:       source,
-		Datum:        datum,
-		Timezone:     tzLabel,
-		Constituents: constituentNames,
-		Predictions:  predictionPoints,
+		Source:            source,
+		Datum:             datum,
+		Timezone:          tzLabel,
+		Constituents:      constituentNames,
+		Predictions:       predictionPoints,
+		ChartDatumOffsetM: roundToDecimal(resolved.chartDatumOffset),
+		MSL:               &msl,
 		Extrema: ExtremaResponse{
 			Highs: highPoints,
 			Lows:  lowPoints,
@@ -451,9 +510,6 @@ func (uc *PredictionUseCase) Execute(req PredictionRequest) (*PredictionResponse
 
 	// Add metadata if available.
 	if metadata != nil {
-		if metadata.MSL != 0.0 {
-			response.MSL = &metadata.MSL
-		}
 		if metadata.DepthM != nil {
 			response.SeabedDepth = metadata.DepthM
 		}
@@ -463,6 +519,12 @@ func (uc *PredictionUseCase) Execute(req PredictionRequest) (*PredictionResponse
 		if metadata.SourceName != "" {
 			response.Meta["metadata_source"] = metadata.SourceName
 		}
+	}
+
+	// Report the mean dynamic topography (model MSL above the geoid) for
+	// information only; it is excluded from heights and depth.
+	if resolved.mdt != 0.0 {
+		response.Meta["mdt_m"] = fmt.Sprintf("%.3f", resolved.mdt)
 	}
 
 	// Add attribution based on source.
@@ -507,6 +569,20 @@ func (uc *PredictionUseCase) GetBathymetry(lat, lon float64) (*domain.LocationMe
 func roundToDecimal(val float64) float64 {
 	const multiplier = 1000.0
 	return math.Round(val*multiplier) / multiplier
+}
+
+// resolveDatum normalizes the requested output datum. An empty value defaults
+// to MSL. "MSL" and "CD" are accepted case-insensitively; anything else is a
+// validation error so the handler returns 400.
+func resolveDatum(datum string) (string, error) {
+	switch strings.ToUpper(datum) {
+	case "", datumMSL:
+		return datumMSL, nil
+	case datumCD:
+		return datumCD, nil
+	default:
+		return "", fmt.Errorf("%w: unsupported datum %q (supported: MSL, CD)", ErrValidation, datum)
+	}
 }
 
 // resolveTimezone maps a requested timezone string to a *time.Location and a
