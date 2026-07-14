@@ -389,10 +389,12 @@ func (uc *PredictionUseCase) Execute(req PredictionRequest) (*PredictionResponse
 	// datum=CD expresses heights relative to chart datum by adding the
 	// (non-negative) chart datum offset to every MSL-referenced height. Water
 	// depth always uses the MSL height, so the offset is applied only to the
-	// reported height_m.
+	// reported height_m. Shift by the same rounded value the response reports
+	// as chart_datum_offset_m, so height_cd = height_msl + chart_datum_offset_m
+	// holds exactly at the API's 3-decimal precision.
 	datumShift := 0.0
 	if datum == datumCD {
-		datumShift = resolved.chartDatumOffset
+		datumShift = roundToDecimal(resolved.chartDatumOffset)
 	}
 
 	// Set longitude for Greenwich phase correction (only for lat/lon queries).
